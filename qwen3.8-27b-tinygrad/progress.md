@@ -315,3 +315,19 @@ Both on node-lair, logs under /tmp, `pgrep -af` to check:
 - `/tmp/dump_max_src.py` — in-process kernel source dump
 - Local mirrors: `/Users/deven367/tmp/tinygrad-work/`, `/Users/deven367/tmp/sweep_nv_q8.py`
 - llama-server still healthy on :9932 (PID 2932371)
+
+## Update — 2026-08-26 night, Q4_K session part 1
+
+Kernel `tinygrad/llm/kernels/nv_q4k.py` VERIFIED exact (sweep 8/8, rel<=1.8e-06 incl.
+chunks>1 + partial warp). All prior failures were sweep-harness bugs: sequential-vs-
+superblock nibble layout, mis-packed scale bytes (get_scale_min_k4 truth documented in
+sweep_q4k.py header), stale `-8` in reference, non-exact activations (pin group max
++-127), missing per-output-row tiling. amd.py wired: Q4_K->nv_q4k.q4_k_linear on NV +
+device-gated set_quantized (also fixes pre-existing stock crash: K-quants on NV packed
+then hit generic matmul with flat weight -> transpose IndexError). Q8_0 sweep regression
+24/24 maxerr=0. Everything UNCOMMITTED on qwen27b-nv-q8-kernel. Gotchas: run WITHOUT
+DEV env (Device.DEFAULT=NV; scripts' "NVK:" prefix defeats nv_custom_kernels_supported);
+detection is lazy (post-forward counts only). REMAINING BLOCKER: set_quantized finds no
+uint8 SHRINK candidate for Q4_K_M tensors on NV -> ggml_type stays None -> A/B asserts.
+Diff weight.uop graphs 0.8b(Q8_0, works) vs 4b(Q4_K_M) next. Full details:
+HANDOFF_Q4K.md. Scripts: /u/demistry/sweep_q4k.py, /u/demistry/proxy_ab_q4k.py.
