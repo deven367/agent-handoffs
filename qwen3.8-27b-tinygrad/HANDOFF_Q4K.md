@@ -1,6 +1,6 @@
-# Handoff — Q4_K NVIDIA kernel (updated 2026-08-26 late)
+# Handoff — Q4_K NVIDIA kernel (updated 2026-08-26 session 2)
 
-## Status: kernel VERIFIED EXACT, wiring landed, ONE bug from proxy A/B green
+## Status: A/B GREEN 32/32 — Q4_K kernel wired, verified, committed, benchmark in progress
 
 ### Done and verified this session
 1. **Kernel exactness proven.** `python3 /u/demistry/sweep_q4k.py` -> 8/8 OK,
@@ -19,7 +19,7 @@
      sweep_nv_q8.py did
    - packed weights must be tiled PER OUTPUT ROW: raw = concatenate(blocks * outf);
      kernel indexes base=(output*(in//256)+block)*36
-2. **amd.py wired** (all uncommitted on branch qwen27b-nv-q8-kernel, working tree ~/tinygrad-src):
+2. **amd.py wired** (committed on branch qwen27b-nv-q8-kernel, fork deven367/tinygrad):
    - import `from tinygrad.llm.kernels.nv_q4k import q4_k_linear` (nv_q4k, NOT nv)
    - `Linear.__call__`: `ggml_type == Q4_K and nv_supported` branch mirroring Q8_0
      (int numel direct, else pad_to(x.max_shape) + shrink)
@@ -29,37 +29,43 @@
      This ALSO fixes a pre-existing stock-tinygrad crash: K-quants on NV used to be
      packed then fall through to generic matmul with a flat 1-D weight ->
      transpose IndexError. That is why only the plain Q8_0 27B file ever loaded.
-   - regression: sweep_nv_q8.py still 24/24 maxerr=0 after the patch.
-3. **Device gotcha:** tgwork_*.sh export DEV="NVK:$NV+NV" but
+3. **THE "BLOCKING BUG" WAS A BROKEN TEST HARNESS.** `proxy_ab_q4k.py::count_type`
+   walked dicts and __dict__ objects but NOT lists — `Transformer.blk` is a plain
+   list, so block Linears were never counted; only `.output` was (Q6_K in Q4_K_M
+   recipes -> legitimately unclaimed), hence n_q4=0. proxy_ab.py (Q8_0) had
+   list handling; the Q4_K copy lost it. Fixed: count_type now walks lists/tuples.
+   Detection itself WORKS: qwen3.5:4b Q4_K_M -> 249 Linears: **131 Q4_K claimed,
+   48 Q8_0 claimed, 70 unclaimed (Q6_K: output + some ffn weights -> generic, correct)**.
+   A/B **32/32 token positions identical** (temp 0), CUSTOM q4_k_linears=131, GENERIC=0.
+   Diagnostic: /u/demistry/diag_q4k_graph.py (walk incl. lists, direct set_quantized).
+4. **Committed & pushed** (identity deven367 <masterdeven@gmail.com> via
+   ~/bin/git-personal):
+   - ad94c9619 "add NVIDIA Q4_K custom linear kernel (verified exact: sweep 8/8, proxy 32/32)"
+     -> nv_q4k.py (new) + nv.py `_decode_linear` name param
+   - 2d46ea489 "route Q4_K on NVIDIA to the custom nv q4_k_linear kernel; gate set_quantized claims by device"
+     -> amd.py routing + gated set_quantized
+5. **Device gotcha:** tgwork_*.sh export DEV="NVK:$NV+NV" but
    `nv_custom_kernels_supported()` only accepts prefixes NV/CUDA -> "NVK" gates FALSE.
    Device.DEFAULT is already "NV". Run everything WITHOUT setting DEV.
 
-### BLOCKING BUG (next step, ~1 debug session)
-qwen3.5:4b Q4_K_M proxy A/B (/u/demistry/proxy_ab_q4k.py, run WITHOUT DEV env):
-generation runs (generic path, sane text) but after forward ALL Linears have
-ggml_type=None -> set_quantized found NO matching `Ops.SHRINK, dtype uint8` node with
-prod(shape) in packed_sizes. Detection worked for Q8_0 (shipped kernel proves it).
-Suspect: gguf.py loader stores Q4_K (type 12) tensors differently than assumed
-(already-bitcast uint32 view? CONTIGUOUS instead of SHRINK? padding offset?), or the
-numel//256*144 key mismatches the raw view size. Next command: dump the weight.uop
-toposort (uint8/16/32 nodes, dtype+shape+numel) for a mid-model Linear of BOTH
-qwen3.5:0.8b (Q8_0, detection works) and qwen3.5:4b (Q4_K_M) and diff the structure.
-GOTCHA: set_quantized fires lazily on first Linear.__call__ — counting ggml_type
-before generate() always shows None. Only trust post-forward counts.
+### IN PROGRESS — 27B Q4_K_M benchmark
+- File was NOT on node-lair. Downloading
+  mradermacher/Qwen3.8-27B-OBLITERATED-GGUF/Qwen3.8-27B-OBLITERATED.Q4_K_M.gguf
+  (16.8 GB) -> /scratch/local/demistry/models/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf
+  (nohup curl PID 3355862, log /tmp/dl_q4km.log).
+- CUSTOM: `cd ~/tinygrad-src && python3 -m tinygrad.llm --model
+  /scratch/local/demistry/models/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf
+  --max_context 512 --benchmark 20`
+- GENERIC baseline (same file): `python3 /u/demistry/bench_generic.py --model ...`
+  (wrapper sets amd.Linear.use_custom_quant=False then cli main()).
+- Compare ONLY vs its own generic path (different model than the Uncensored Q8_0
+  file; Q8_0 27B custom-kernel number was 20.9 tok/s). GPU free: check
+  `nvidia-smi --query-compute-apps` first.
 
-### After A/B is green (32/32 tokens, n_q4>0)
-1. Commit: nv_q4k.py (new), nv.py (_decode_linear name param), amd.py (routing +
-   gated set_quantized) on branch qwen27b-nv-q8-kernel in fork deven367/tinygrad.
-2. Benchmark 27B: `cd ~/tinygrad-src && python3 -m tinygrad.llm --model
-   /scratch/local/demistry/models/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf
-   --max_context 512 --benchmark 20`. Compare ONLY vs its own generic path
-   (different model than the Uncensored Q8_0 file; rerun generic baseline for it by
-   flipping amd.Linear.use_custom_quant=False or temporarily reverting routing).
-   GPU is free tonight (llama-server not running; check `nvidia-smi` first anyway).
-
-## Files touched this session
-- node-lair ~/tinygrad-src: tinygrad/llm/kernels/amd.py (M), tinygrad/llm/kernels/nv.py (M),
-  tinygrad/llm/kernels/nv_q4k.py (new, untracked) — UNCOMMITTED
-- node-lair /u/demistry/: sweep_q4k.py (rewritten, passing), proxy_ab_q4k.py (new),
-  patch_amd*.py, fix_import.py (applied scratch scripts, deletable)
-- local macOS: /Users/deven367/tmp/{patch_amd.py,patch_amd2.py,fix_import.py,proxy_ab_q4k.py}
+## Files touched
+- node-lair ~/tinygrad-src: tinygrad/llm/kernels/amd.py (M), nv.py (M),
+  nv_q4k.py (NEW) — committed ad94c9619..2d46ea489 on qwen27b-nv-q8-kernel, pushed
+- node-lair /u/demistry/: sweep_q4k.py (passing), proxy_ab_q4k.py (FIXED list walk,
+  passing), diag_q4k_graph.py (new), bench_generic.py (new),
+  patch_amd*.py, fix_import.py (scratch, deletable)
+- local macOS: /Users/deven367/tmp/{proxy_ab_q4k.py,diag_q4k_graph.py,bench_generic.py,HANDOFF_Q4K.md}

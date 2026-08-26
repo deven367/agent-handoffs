@@ -331,3 +331,28 @@ detection is lazy (post-forward counts only). REMAINING BLOCKER: set_quantized f
 uint8 SHRINK candidate for Q4_K_M tensors on NV -> ggml_type stays None -> A/B asserts.
 Diff weight.uop graphs 0.8b(Q8_0, works) vs 4b(Q4_K_M) next. Full details:
 HANDOFF_Q4K.md. Scripts: /u/demistry/sweep_q4k.py, /u/demistry/proxy_ab_q4k.py.
+
+## Update — 2026-08-26, Q4_K session part 2: BLOCKER RESOLVED, A/B GREEN
+
+The "set_quantized finds no Q4_K SHRINK" blocker was a broken test harness, not the
+wiring. proxy_ab_q4k.py::count_type walked dicts/__dict__ but NOT lists; Transformer.blk
+is a plain list, so block Linears were never counted and only .output (Q6_K in Q4_K_M
+recipes -> correctly unclaimed) was seen -> n_q4 always 0. proxy_ab.py (Q8_0) had list
+handling; the Q4_K copy lost it. Fixed (list/tuple walk) -> **A/B GREEN 32/32 token
+positions** on qwen3.5:4b Q4_K_M (temp 0): CUSTOM q4_k_linears=131, GENERIC=0.
+Detection breakdown on 4b (249 Linears): 131 Q4_K + 48 Q8_0 claimed by set_quantized,
+70 unclaimed = Q6_K weights (output + some ffn) -> generic path, correct behavior.
+Diagnostic diag_q4k_graph.py walks incl. lists and calls set_quantized directly.
+
+Committed & pushed to fork deven367/tinygrad branch qwen27b-nv-q8-kernel (identity
+deven367 <masterdeven@gmail.com> via ~/bin/git-personal):
+  ad94c9619 add NVIDIA Q4_K custom linear kernel (verified exact: sweep 8/8, proxy 32/32)
+  2d46ea489 route Q4_K on NVIDIA to the custom nv q4_k_linear kernel; gate set_quantized claims by device
+Note: commit identity fixed retroactively on all branch commits (was "Deven Mahesh Mistry
+<demistry@lair-*>") via filter-branch + force-push; agent-handoffs repo likewise.
+
+IN PROGRESS: 27B Q4_K_M benchmark. File was missing on node-lair; downloading
+mradermacher/Qwen3.8-27B-OBLITERATED-GGUF Qwen3.8-27B-OBLITERATED.Q4_K_M.gguf (16.8 GB)
+to /scratch/local/demistry/models/. Custom run: python3 -m tinygrad.llm --model ...Q4_K_M.gguf
+--max_context 512 --benchmark 20. Generic baseline same file: /u/demistry/bench_generic.py
+(sets amd.Linear.use_custom_quant=False). GPU free tonight (nvidia-smi 0 MiB).
