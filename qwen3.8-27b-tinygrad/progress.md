@@ -356,3 +356,15 @@ mradermacher/Qwen3.8-27B-OBLITERATED-GGUF Qwen3.8-27B-OBLITERATED.Q4_K_M.gguf (1
 to /scratch/local/demistry/models/. Custom run: python3 -m tinygrad.llm --model ...Q4_K_M.gguf
 --max_context 512 --benchmark 20. Generic baseline same file: /u/demistry/bench_generic.py
 (sets amd.Linear.use_custom_quant=False). GPU free tonight (nvidia-smi 0 MiB).
+
+## Update — 2026-08-26, Q4_K session part 3: 27B benchmark DONE
+
+Qwen3.8-27B-OBLITERATED.Q4_K_M.gguf (16.8 GB) downloaded from
+mradermacher/Qwen3.8-27B-OBLITERATED-GGUF via hf_transfer (~60 MB/s; plain curl was
+~1.3 MB/s, killed). Exclusive L40S, max_context 512, bench 20:
+- CUSTOM: 12.87 tok/s (77.7 ms/tok, 255 GB/s, 19.8 GB VRAM); 440 nv_linear_q4_k
+  invocations proven in DEBUG=2 log. Per-step: 266 kernels / 8 batched, 20.24 ms
+  GEMV of 77.09 ms step -> DeltaNet sequential chain dominates the rest (as predicted).
+- GENERIC (same file, use_custom_quant=False): 2.56 tok/s (391 ms/tok, 44 GB/s).
+- Speedup 5.03x. NOT comparable to Q8_0-Uncensored 20.9 tok/s (different model).
+Logs: /tmp/bench_q4k_{custom,dbg,generic}.log. Handoff docs updated + pushed.

@@ -1,6 +1,16 @@
 # Handoff — Q4_K NVIDIA kernel (updated 2026-08-26 session 2)
 
-## Status: A/B GREEN 32/32 — Q4_K kernel wired, verified, committed, benchmark in progress
+## Status: DONE — Q4_K kernel verified, A/B GREEN, 27B benchmarked (5.0x vs generic)
+
+### 27B benchmark (Qwen3.8-27B-OBLITERATED.Q4_K_M.gguf, exclusive L40S, max_context 512, bench 20)
+- CUSTOM (Q4_K+Q8_0 kernels; Q6_K tensors generic): **12.87 tok/s** (77.7 ms/tok, 255 GB/s, 19.8 GB VRAM)
+- GENERIC (use_custom_quant=False, same file): **2.56 tok/s** (391 ms/tok, 44 GB/s)
+- Speedup **5.03x**. Engagement proven: 440 `nv_linear_q4_k` invocations in a 3-token DEBUG=2 run.
+- Per-step: 266 unique kernels, 8 batched, 20.24 ms GEMV / 77.09 ms step — remaining ~57 ms is the
+  DeltaNet sequential chain (matches handoff prediction: GEMV is no longer the bottleneck).
+- Note: 12.87 vs Q8_0-Uncensored 20.9 tok/s is NOT comparable (different model/fine-tune/file).
+  Same-file comparisons only: 5.03x. llama.cpp comparison for THIS file was not run (llama-server
+  serves the Uncensored Q8_0; would need its gguf + a llama.cpp benchmark pass).
 
 ### Done and verified this session
 1. **Kernel exactness proven.** `python3 /u/demistry/sweep_q4k.py` -> 8/8 OK,
@@ -48,19 +58,11 @@
    `nv_custom_kernels_supported()` only accepts prefixes NV/CUDA -> "NVK" gates FALSE.
    Device.DEFAULT is already "NV". Run everything WITHOUT setting DEV.
 
-### IN PROGRESS — 27B Q4_K_M benchmark
-- File was NOT on node-lair. Downloading
-  mradermacher/Qwen3.8-27B-OBLITERATED-GGUF/Qwen3.8-27B-OBLITERATED.Q4_K_M.gguf
-  (16.8 GB) -> /scratch/local/demistry/models/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf
-  (nohup curl PID 3355862, log /tmp/dl_q4km.log).
-- CUSTOM: `cd ~/tinygrad-src && python3 -m tinygrad.llm --model
-  /scratch/local/demistry/models/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf
-  --max_context 512 --benchmark 20`
-- GENERIC baseline (same file): `python3 /u/demistry/bench_generic.py --model ...`
-  (wrapper sets amd.Linear.use_custom_quant=False then cli main()).
-- Compare ONLY vs its own generic path (different model than the Uncensored Q8_0
-  file; Q8_0 27B custom-kernel number was 20.9 tok/s). GPU free: check
-  `nvidia-smi --query-compute-apps` first.
+### COMPLETED — 27B Q4_K_M benchmark (see status section for numbers)
+- File downloaded via hf_transfer (16.8 GB, ~60 MB/s; plain curl was ~1.3 MB/s).
+  Actual filename on disk: `Qwen3.8-27B-OBLITERATED.Q4_K_M.gguf` (dot, not dash —
+  repo filename kept by huggingface-cli). Logs: /tmp/bench_q4k_custom.log,
+  /tmp/bench_q4k_dbg.log (DEBUG=2, kernel names), /tmp/bench_q4k_generic.log.
 
 ## Files touched
 - node-lair ~/tinygrad-src: tinygrad/llm/kernels/amd.py (M), nv.py (M),
