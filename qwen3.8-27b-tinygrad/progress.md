@@ -78,6 +78,13 @@ BEAM_CACHE patch, nv.py kernel, amd.py integration), on top of d851aca9a.
   llama.cpp + MTP is the sequential DeltaNet chain (old 484 ms/token: ~420 ms non-GEMV).
 - BEAM_CACHE patch (postrange.py) is committed but **unverified** — training never completed
   (slurm GPU-cgroup churn, /tmp wipes). Not needed for the kernel result.
+- **Tier 1 follow-up (same branch)**: aligned `__ldcs` streaming loads on the 16 weight
+  words + scale (weights read once/token; L2 kept for reused xq/xd). 27B decode
+  **51.8 → 47.9 ms/token (19.3 → 20.9 tok/s, +7.6%)**; 0.8B 4.68 → 4.09 ms (+12.6%).
+  Still exact (24/24 + 4/4, maxerr=0); proxy A/B 32/32 tokens. Now at **88% of llama.cpp
+  decode rate (20.9 vs 23.8 t/s)**. Dead ends explored: unaligned 4-byte loads and
+  misaligned `__ldcs` hang or return garbage on this stack; a relayout to aligned 32B
+  blocks peaks at ~56 GB VRAM (file buffer is shared across tensors) — both rejected.
 
 ## Profiling evidence (what the kernel work must fix)
 
