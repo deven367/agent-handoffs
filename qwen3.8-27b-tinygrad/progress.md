@@ -37,7 +37,8 @@ cd ~/tinygrad-src && PATH=/tmp/tgclang/bin:$PATH python3 -m tinygrad.llm \
   --model /scratch/local/demistry/models/Qwen3.8-27B-Uncensored-Q8_0.gguf \
   --max_context 512 --benchmark 20
 ```
-Steady state: **2.06 tok/s** (484 ms/token, ~59 GB/s effective weight traffic, ~29.2 GB VRAM).
+Steady state (baseline, generic codegen path): **2.06 tok/s** (484 ms/token, ~59 GB/s
+effective weight traffic, ~29.2 GB VRAM). Superseded by the custom kernel — see Result 3.
 First 2 tokens are JIT compile (~22 s + ~10 s). Arch `qwen35` fully supported incl.
 GatedDeltaNet blocks (65 blocks = 48 SSM + 16 attention + nextn stripped).
 
@@ -45,11 +46,38 @@ GatedDeltaNet blocks (65 blocks = 48 SSM + 16 attention + nextn stripped).
 
 | engine | decode | note |
 |---|---|---|
-| tinygrad (measured now) | **2.06 tok/s** | fallback codegen path |
+| tinygrad, generic path | 2.06 tok/s | fallback codegen path (baseline) |
+| tinygrad + nv Q8_0 kernel | **19.3 tok/s** | this work — see Result 3 |
 | llama.cpp, no MTP | 22.5 t/s | pp512 ≈ 2600 t/s |
 | llama.cpp + draft-mtp | 37.7 t/s | speculative decoding |
 
-tinygrad is **~11–18× slower**. It has no MTP/speculative support.
+Generic-path tinygrad is **~11–18× slower**. No MTP/speculative support — with the custom
+kernel the gap shrinks to **1.2× vs llama.cpp no-MTP** (19.3 vs 22.5 t/s) and **2× vs llama.cpp
++ MTP** (37.7 t/s).
+
+## Result 3 — NVIDIA Q8_0 custom GEMV kernel: DONE (2.06 → 19.3 tok/s, 9.4×)
+
+Shipped on branch `qwen27b-nv-q8-kernel` in fork `deven367/tinygrad` (3 commits:
+BEAM_CACHE patch, nv.py kernel, amd.py integration), on top of d851aca9a.
+
+- `tinygrad/llm/kernels/nv.py` — UOp-built Q8_0 GEMV: packed uint16 weight view
+  (17 words/block), `__dp4a` lane dot, warp shuffle reduction via `__shfl_xor_sync`,
+  `fmaxf` CUSTOMI (avoids double-evaluated shuffle from ternary lowering). Exact vs numpy:
+  24/24 small + 4/4 production shapes (10240×5120, 5120×17408, 17408×5120×2tok,
+  151936×1024), maxerr=0.
+- `tinygrad/llm/kernels/amd.py::Linear` — `set_quantized` recognizes Q8_0
+  (272 B/256-weight block) only on NV/CUDA (uint16 view, byte-aligned offset);
+  `__call__` routes `ggml_type==8` on NV to `q8_0_linear`, with pad_to/shrink for symbolic
+  token counts. AMD + generic paths unchanged.
+- Proxy equivalence (qwen3.5:0.8b, greedy, temp 0): **32/32 token positions identical**;
+  187/187 Linears engage the custom kernel (generic run: 0).
+- 27B benchmark (L40S, exclusive, Q8_0 file, max_context 512, bench 20):
+  **steady 19.3 tok/s = 51.8 ms/token, ~616 GB/s effective weight traffic**
+  (baseline 2.06 tok/s / 59 GB/s → **9.4×**). `nv_linear_q8_0` + `nv_q8_quantize` confirmed
+  in the compile log. GEMV bandwidth 616 GB/s ≈ llama.cpp-class (~650); the remaining gap to
+  llama.cpp + MTP is the sequential DeltaNet chain (old 484 ms/token: ~420 ms non-GEMV).
+- BEAM_CACHE patch (postrange.py) is committed but **unverified** — training never completed
+  (slurm GPU-cgroup churn, /tmp wipes). Not needed for the kernel result.
 
 ## Profiling evidence (what the kernel work must fix)
 
