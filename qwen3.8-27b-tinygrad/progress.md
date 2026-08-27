@@ -2,7 +2,8 @@
 
 Original asks: (1) run qwen3.8-27b through tinygrad, (2) compare vs llama.cpp,
 (3) write a kernel to improve inference speed. Status: (1)(2)(3) DONE —
-two custom NVIDIA GEMV kernels shipped and benchmarked; next lever is the DeltaNet chain.
+two custom NVIDIA GEMV kernels shipped and benchmarked; P0 profile done (session 3) —
+**next lever is the Q6_K GEMV kernel, not the DeltaNet chain** (see p1-handoff.md).
 
 ## Status (2026-08-26, session 2 complete)
 
@@ -18,6 +19,16 @@ two custom NVIDIA GEMV kernels shipped and benchmarked; next lever is the DeltaN
   authored `deven367 <masterdeven@gmail.com>` (`~/bin/git-personal` wrapper). Commit identity
   fixed retroactively on both tinygrad and agent-handoffs repos (filter-branch + force-push).
 - Remaining gap to llama.cpp: sequential **DeltaNet chain** (~57 ms of 77 ms/step) — see plan P1.
+
+## Session 3 (2026-08-26): P0 profile complete — read `p1-handoff.md`
+
+- Per-step profile (2282 kernels, 78.8 ms GPU): the real bottleneck is the **67 Q6_K
+  linears on the generic matmul path (~51.4 ms/step, 65%)**, not the DeltaNet chain
+  (~4.6 ms, 6%). Session-2 assumption corrected.
+- Bench metric note: 12.49 tok/s includes prefill re-run per step; real decode =
+  ~49 tok/s (20.3 ms/token).
+- Next: build `nv_q6k.py` (Q6_K GEMV; template = nv_q4k.py, dequant from amd.py:192-203).
+  Full build/verify plan in p1-handoff.md §6.
 
 ## Environment (node-lair == lair-g7)
 
