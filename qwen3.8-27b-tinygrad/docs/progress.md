@@ -1,10 +1,13 @@
-# tinygrad Qwen3.8-27B on node-lair — Progress & Handoff (consolidated 2026-08-26)
+# tinygrad Qwen3.8-27B on node-lair — Progress & Handoff (consolidated 2026-08-27, updated 2026-08-27 session 5)
 
 Original asks: (1) run qwen3.8-27b through tinygrad, (2) compare vs llama.cpp,
 (3) write a kernel to improve inference speed. Status: (1)(2)(3) DONE —
 two custom NVIDIA GEMV kernels shipped and benchmarked; P0 profile done (session 3) —
 **next lever is the Q6_K GEMV kernel, not the DeltaNet chain** (see p1-handoff.md).
-
+- **CORRECTION (session 5):** The Q6_K loader "bug" from session 4 was FALSE. `xh` already has `.lshift(4)` (commit `67ed4c4eb3`). The incorrect fix (`8047d69b8`) was applied and reverted (`65e09942f`). The loader is correct; no corruption occurred on Q6_K weights. Evidence: `p1-q6k-session5-handoff.md` §2, corrected `check_q6k_loader.py` (exact match on 3 real Q6_K tensors: `output.weight`, `blk.0.attn_qkv.weight`, `blk.0.ffn_down.weight`).
+- **CORRECTION (session 5):** The "vanishing model" incident was a filename typo (`Q4_K_M` vs `Q4_K_M` with hyphen vs dot). Stable copy at `/data/user/demistry/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf` (`16,810,705,952` bytes). No evidence of repeated unlinking.
+- **Session 5 results:** `nv_q6k.py` (`1fe4ba369`) verified. Sweep (`sweep_q6k.py`): `7/7 OK`, max rel `1.07e-07`. Profile (`kstat2.py`): `65` calls/step, `7.4 ms` (`19.4%` vs `51.4 ms` generic `65%`). Benchmark (`Q4_K_M`): `28.5 tok/s` (`2.3×` over `12.49` session-2). Decode graph: `39.74 ms/step` (`2×` faster vs `78.84 ms` session-3). Custom GEMV share: `72.1%` (`q4_k 52.7%` + `q6_k 19.4%`).
+- **Working quant:** `Qwen3.8-27B-Uncensored-Q4_K_M.gguf` (`16.8 GB`) — `nv_q6k` engaged. Unsloth `Qwen3.8-27B-UD-Q4_K_M.gguf` (`16.5 GB`) has different mix (`Q8_0(106) Q3_K(7) Q4_K(104) Q5_K(131) Q6_K(30) IQ4_NL(7) IQ3_S(4) IQ4_XS(117)`); requires loader additions (`Q3_K`/`IQ4_NL`/etc.) — planned after P7 hygiene.
 ## Status (2026-08-26, session 2 complete)
 
 - **Q8_0 NV GEMV kernel: DONE.** 27B decode 2.06 → **20.9 tok/s** (9.4× base, 47.9 ms/tok,
@@ -20,7 +23,7 @@ two custom NVIDIA GEMV kernels shipped and benchmarked; P0 profile done (session
   fixed retroactively on both tinygrad and agent-handoffs repos (filter-branch + force-push).
 - Remaining gap to llama.cpp: sequential **DeltaNet chain** (~57 ms of 77 ms/step) — see plan P1.
 
-## Session 3 (2026-08-26): P0 profile complete — read `p1-handoff.md`
+## Session 3 (2026-08-26): P0 profile complete — read `p1-handoff.md` (docs/)
 
 - Per-step profile (2282 kernels, 78.8 ms GPU): the real bottleneck is the **67 Q6_K
   linears on the generic matmul path (~51.4 ms/step, 65%)**, not the DeltaNet chain
@@ -29,6 +32,25 @@ two custom NVIDIA GEMV kernels shipped and benchmarked; P0 profile done (session
   ~49 tok/s (20.3 ms/token).
 - Next: build `nv_q6k.py` (Q6_K GEMV; template = nv_q4k.py, dequant from amd.py:192-203).
   Full build/verify plan in p1-handoff.md §6.
+- **P4 — Q6_K NV kernel: COMPLETE.** `nv_q6k.py` (`1fe4ba369`) + `amd.py` routing. Verified: sweep (`7/7 OK`), profile (`7.4 ms` vs `51.4 ms` generic), benchmark (`28.5 tok/s`).
+- **P5 — BEAM_CACHE: UNVERIFIED** (still — training never completed; `/tmp` wipes). Defer.
+- **P6 — MTP / speculative decoding: LOW ROI.** Last structural gap (`37.7` vs `28.5` tok/s). Defer.
+## Session 4 (2026-08-26, ~23:45 EDT): PAUSED — read `p1-q6k-handoff.md`
+
+- **Q6_K loader bug found (gguf.py)**: `xl.bitwise_or(xh)` missing `<<4` — the high 2
+  bits must land in bits 4-5 (ggml C ref + AMD kernel both correct; loader wrong). Until
+  the 1-line fix lands, ALL Q6_K weights on the generic path are corrupted (67 tensors in
+  the OBLITERATED file: lm_head, ffn_down, attn_qkv, attn_v). Evidence: p1-q6k-handoff §1.
+  Numeric confirmation pending (model-file incident below).
+- Q6_K NV kernel design complete, draft written (`kernels/nv_q6k.py` — **unverified**);
+  layout corrected vs ggml C (16 scales at bytes 192:208, d f16 at 208:210; p1-handoff §6
+  had 12+pad — wrong). Routing diff for amd.py is in the handoff §4.
+- **Incident**: `/scratch/.../Qwen3.8-27B-OBLITERATED.Q4_K_M.gguf` intermittently vanishes
+  (unknown re-copy process on the shared box; minutes-long ENOENT windows). Copy to
+  `/data/user/demistry` (user-suggested, 70T NFS) failed 8/8. Next: stabilize file →
+  confirm loader bug on real bytes → fix loader (separate commit) → apply kernel+routing →
+  sweep → proxy A/B → 27B decode bench → re-profile → llama.cpp cross-check on the same
+  file (`/u/demistry/llama.cpp` has a full CUDA build — completes P7, proves the fix).
 
 ## Environment (node-lair == lair-g7)
 
@@ -41,7 +63,9 @@ two custom NVIDIA GEMV kernels shipped and benchmarked; P0 profile done (session
   - `Qwen3.8-27B-Uncensored-Q8_0.gguf` (29.0 GB) — WORKS, Q8_0 kernel benchmarked
   - `Qwen3.8-27B-UD-Q8_K_XL.gguf` (31.4 GB) — DOES NOT LOAD (Q3_K(11)/Q8_K(15) missing from loader)
   - `Qwen3.8-27B-OBLITERATED.Q4_K_M.gguf` (16.8 GB) — downloaded this session, Q4_K kernel benchmarked
-  - two mmproj files (vision; irrelevant to tinygrad)
+- `Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf` (16.8 GB) → CORRECTED FILENAME (hyphen, not dot). Stable copy at `/data/user/demistry/`. Benchmarked (`28.5 tok/s` with `nv_q6k`). `llama.cpp` cross-check (`P7`): NOT COMPLETED (interrupted by Unsloth switch). Build available at `/u/demistry/llama.cpp/`.
+- New file: `/scratch/local/demistry/models/Qwen3.8-27B-UD-Q4_K_M.gguf` (`16,464,440,224` bytes) — Unsloth Dynamic v3.0 mix; fails with `GGML type '11' not supported` (`Q3_K`). Small dev model downloaded: `gemma-3-270m-it-UD-Q8_K_XL.gguf` (`471,104,544` bytes) at same path.
+- `Qwen3.8-27B-UD-Q8_K_XL.gguf` (`31.4 GB`): FAILS (`Q3_K`/`Q8_K` loader missing) — remains unaddressed.
 - clang (CPU backend only): conda env at `/tmp/tgclang/bin`, put on PATH. gcc fails (tinygrad
   passes clang-only `--target=x86_64-none-unknown-elf`).
 
@@ -134,7 +158,7 @@ Detection breakdown qwen3.5:4b Q4_K_M (249 Linears): 131 Q4_K + 48 Q8_0 claimed,
 - BEAM=2: 75 → 142 tok/s (0.8B), or 3.55–3.96 ms/tok exclusive-GPU (3.4–3.7×). Search costs
   ~4 min/process and results were NOT persisted (beam cache patch unverified) — headroom proof, not shippable.
 - 27B Q4_K_M per-step: GEMV 20.24 ms / 77.09 ms → **DeltaNet chain is now the bottleneck**.
-
+- Per-step profile (session 5): `39.74 ms`, `Q6_K` custom `7.4 ms` (`19.4%`), `Q4_K` custom `19.9 ms` (`55.0%`), generic `r_*` `7.2 ms` (`19.8%`), `E_*` `1.1 ms` (`3.2%`), `q8_quantize` `0.7 ms`. Old generic `r_40_32_4_*`/`r_80_32_4_*` families eliminated.
 ## Improvement plan (ranked; P0 first — profile before touching anything)
 
 - **P0 — Profile the 57 ms/step non-GEMV time.** Run the kstat.py pattern on
@@ -158,11 +182,11 @@ Detection breakdown qwen3.5:4b Q4_K_M (249 Linears): 131 Q4_K + 48 Q8_0 claimed,
   generic ops in the ~57 ms).
 - **P6 — Speculative decoding / MTP.** Last structural gap vs llama.cpp (37.7 t/s +MTP vs 20.9
   Q8_0). Large project, low ROI/hour vs P1–P5.
-- **P7 — Hygiene.** llama.cpp benchmark on the OBLITERATED Q4_K_M file (completes ask #2 for this
+- **P7 — Hygiene (updated):** `llama.cpp` cross-check on `OBLITERATED-Q4_K_M.gguf`: NOT COMPLETED (interrupted). `Q3_K`/`IQ4_NL` loader additions: NOT STARTED (planned for Unsloth support). Logit-diff A/B (not `argmax`): NOT STARTED. AMD path re-check: NOT STARTED (no AMD GPU).
   file); add Q3_K/Q8_K loader types so UD-Q8_K_XL.gguf loads; logit-diff (not just argmax) A/B;
   AMD path re-check after the set_quantized gating (no AMD GPU here — code-review level).
 
-Suggested order: P0 → P1 → P2 → P3, then P4/P5 as budget allows.
+Suggested order (updated): P7 hygiene (`llama.cpp` bench + loader types) → Unsloth Dynamic v3.0 quant kernels (`Q3_K`/`IQ4_NL` loader + routing) → P1 DeltaNet (if budget remains). P0-P4 COMPLETE.
 
 ## Artifacts
 
