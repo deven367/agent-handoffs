@@ -1,5 +1,10 @@
 # tinygrad Qwen3.8-27B on node-lair — Progress & Handoff (consolidated 2026-08-27, updated 2026-08-27 session 5)
 
+
+> **READ FIRST: `ACTIVE.md`** (current state + next steps). This file is the
+> historical timeline; earlier session notes were corrected by later ones
+> (sessions are frozen in `sessions/`, numbered chronologically).
+
 Original asks: (1) run qwen3.8-27b through tinygrad, (2) compare vs llama.cpp,
 (3) write a kernel to improve inference speed. Status: (1)(2)(3) DONE —
 two custom NVIDIA GEMV kernels shipped and benchmarked; P0 profile done (session 3) —

@@ -28,12 +28,10 @@ qwen3.8-27b-tinygrad/
 
 ## Reading order (recommended)
 
-1. `docs/progress.md` — session timeline, results, plan
-2. `docs/handoff-2026-08-27-nan-fixed.md` — current state: NaN blocker FIXED, next steps
+1. `docs/ACTIVE.md` — **current state + next steps (start here)**
+2. `docs/progress.md` — master timeline
+3. `docs/sessions/` — frozen historical handoffs (numbered; read for context)
+4. `docs/kernels-explained.md` — how the kernels work
 
 ## Status (one line)
-
-Custom NVIDIA Q8_0/Q4_K/Q6_K (and new Q5_K/IQ4_XS) GEMV kernels; Unsloth
-UD-Q4_K_M logits finite & argmax-identical to generic after the IQ4_NL≡Q4_K
-byte-collision fix. Pending: token A/B confirmation, decode benchmark,
-llama.cpp comparison, chunked-prefill validation, DeltaNet, MTP.
+**See `docs/ACTIVE.md`** for the current state and next actions.
