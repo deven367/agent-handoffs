@@ -1,18 +1,19 @@
-# sessions/ — historical session notes (read for context only)
+# sessions/ — historical session notes
 
-Frozen, numbered chronologically. **Do not treat as current state** — earlier
-notes were superseded by later findings (e.g., the "Q6_K loader bug" was false;
-the byte-count claim collision was the real NaN root cause). For what to do
-now, read `../ACTIVE.md`.
+Numbered chronologically. Earlier notes may be superseded; always read `../ACTIVE.md` first.
 
 | file | covers |
 |---|---|
 | `01-2026-08-26-p0-profile-q6k-plan.md` | P0 profile; Q6_K bottleneck; build plan |
-| `02-2026-08-26-q6k-build.md` | Q6_K kernel build + verification plan |
-| `03-2026-08-26-q6k-verified-unsloth-switch.md` | Q6_K verified; loader-bug disproof; user switched to Unsloth quant |
-| `04-2026-08-27-unsloth-plan-corrections.md` | corrections + Unsloth loader/kernel plan |
-| `05-2026-08-27-unsloth-nan-discovery.md` | NaN blocker discovery + debug path |
-| `06-2026-08-27-nan-fixed.md` | **Root cause + fix** (IQ4_NL ≡ Q4_K claim collision); most relevant for current work |
+| `02-2026-08-26-q6k-build.md` | Q6_K kernel build and verification plan |
+| `03-2026-08-26-q6k-verified-unsloth-switch.md` | Q6_K verified; loader-bug disproof; Unsloth switch |
+| `04-2026-08-27-unsloth-plan-corrections.md` | corrections and Unsloth loader/kernel plan |
+| `05-2026-08-27-unsloth-nan-discovery.md` | NaN blocker discovery and debug path |
+| `06-2026-08-27-nan-fixed.md` | IQ4_NL/Q4_K claim-collision root cause and fix |
+| `07-2026-09-05-262k-context-plan.md` | current 262K memory decision and execution plan |
 
-Filed alongside (not sessions): `../progress.md` (master timeline),
-`../ACTIVE.md` (current state), `../kernels-explained.md` (kernel reference).
+Filed alongside:
+
+- `../ACTIVE.md` — current state and entry point
+- `../progress.md` — master timeline
+- `../kernels-explained.md` — kernel reference

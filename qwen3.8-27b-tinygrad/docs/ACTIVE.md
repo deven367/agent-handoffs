@@ -1,72 +1,54 @@
-# ACTIVE — Current state & next steps (read FIRST)
+# ACTIVE — Current state and next steps
 
-> Start here. Everything else in `sessions/` is historical context.
-> Snapshot: 2026-08-27 (after NaN fix).
+> Snapshot: 2026-09-05. Start with `sessions/07-2026-09-05-262k-context-plan.md`.
 
-## Ground truth right now
+## Ground truth
 
-**Working, verified:**
-- Full custom-kernel logits on **Unsloth `UD-Q4_K_M`** are **finite and argmax-identical to generic** (argmax 5328, corr 0.99989). This unblocks the original ask: run the Unsloth quant through tinygrad fast.
-- Loaders exact for `Q3_K` and `IQ4_NL` (random + real GGUF blocks, `rel ≤ 1e-8`).
-- NVIDIA GEMV kernels verified exact vs numpy reference: `Q8_0`, `Q4_K`, `Q6_K`, **`Q5_K`** (new), **`IQ4_XS`** (new). All sweeps pass.
-- Fixed root cause of earlier NaNs: `IQ4_NL` (18 B/32 elems) collided with `Q4_K` (144 B/256) in the byte-count claim table → 7 tensors misrouted. Fix: loader threads real GGUF types (`tinygrad.tensor_types`) and `from_gguf` stamps `Linear.ggml_type` (see session 06).
+- Host: `node-lair`, one L40S with `46068 MiB` total.
+- tinygrad: `/u/demistry/tinygrad-src`, branch `qwen27b-nv-q8-kernel`.
+- Source is clean and pushed at `b3d8506a1 feat(llm): support Qwen3.8 CUDA quants`.
+- Launcher is tracked at `/u/demistry/agent-handoffs/Makefile`; `~/Makefile` symlinks to it.
+- `make serve-tg` uses `Qwen3.8-27B-UD-Q8_K_XL.gguf`, tinygrad's default context `4096`, and port `8888`.
+- Q8_K_XL warmup and generation pass at context 512 with ~29.5 GiB tracked memory.
+- The Q8 server passes `/v1/chat/completions` at context 4096 and uses `34316 MiB` by `nvidia-smi`.
+- Q4_K_M also passes warmup and generation at context 512 with ~16.0 GiB tracked memory.
+- The recurrent non-AMD `chunk_size=1` guard is restored. Removing it made symbolic 32-token GEMV scratch OOM the L40S.
+- No GPU process was left running.
 
-**Files changed (uncommitted on node-lair, branch `qwen27b-nv-q8-kernel`):**
+## 262K decision
+
+The model's native context is `262144`; no RoPE scaling is needed. Its FP16 KV cache at that length is exactly 16 GiB.
+
+- **Q8_K_XL + L40S + FP16 KV does not fit:** projected minimum is ~45.5 GiB versus ~44.99 GiB available, before safe runtime headroom.
+- **Recommended shortest L40S route:** use `/data/user/demistry/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf`; projected total is ~32 GiB.
+- If Q8_K_XL is mandatory, use a 64 GB or larger GPU, or implement directly consumed quantized KV. Do not dequantize the full cache per token.
+
+## Next agent
+
+Read and execute:
+
 ```text
- M tinygrad/llm/gguf.py            # tensor_types side-channel
- M tinygrad/llm/model.py           # stamp Linear.ggml_type + _needs_pack
- M tinygrad/llm/kernels/amd.py     # type-guided claim + _needs_pack gate
-?? tinygrad/llm/kernels/nv_q5k.py  # new Q5_K GEMV
-?? tinygrad/llm/kernels/nv_iq4xs.py# new IQ4_XS GEMV
+docs/sessions/07-2026-09-05-262k-context-plan.md
 ```
 
-**Machine:** `node-lair` (L40S). Worktree `/u/demistry/tinygrad-src`. GPU was clean at last handoff.
+Start with Route A unless both Q8_K_XL and the L40S are explicit hard constraints. First milestone is a full-context allocation/warmup smoke; second is practical chunked prefill. Do not conflate fitting with useful 262K prompt throughput.
 
-## Next actions (prioritized)
+## Important paths
 
-### 1. Commit the fixed tree (blocks everything)
-```bash
-ssh node-lair
-cd /u/demistry/tinygrad-src
-git status   # expect the 5 files above
-# commit loader type threading + stamping + new kernels as logical commits,
-# author: deven367 <masterdeven@gmail.com> (use ~/bin/git-personal wrapper)
+```text
+Q8 model:  /scratch/local/demistry/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
+Q4 model:  /data/user/demistry/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf
+tinygrad:  /u/demistry/tinygrad-src
+launcher:  /u/demistry/agent-handoffs/Makefile
+logs:      /tmp/tinygrad-server.log
 ```
 
-### 2. Complete Unsloth token A/B (was canceled mid-run)
-```bash
-python3 /u/demistry/p1/ud_ab.py custom /scratch/local/demistry/models/Qwen3.8-27B-UD-Q4_K_M.gguf 12
-python3 /u/demistry/p1/ud_ab.py generic /scratch/local/demistry/models/Qwen3.8-27B-UD-Q4_K_M.gguf 12
-diff /tmp/ab_custom.txt /tmp/ab_generic.txt   # expect identical
-```
+The old `/scratch/local/demistry/models/Qwen3.8-27B-UD-Q4_K_M.gguf` fixture is absent. The direct tinygrad `NV` backend currently gets `/dev/nvidia0: EPERM`; use `CUDA` for runtime and kernel sweeps.
 
-### 3. Benchmark Unsloth file with custom kernels
-```bash
-python3 -m tinygrad.llm --model .../Qwen3.8-27B-UD-Q4_K_M.gguf --max_context 512 --benchmark 15
-```
-- Read the **decode graph line** (`*** NV ... tm Xms`), not the prefill-dominated tok/s.
-- Compare to `28.5 tok/s` historical (different file: Uncensored Q4_K_M) — this file has Q5_K/IQ4_XS custom now.
+## Documentation map
 
-### 4. llama.cpp same-file comparison (completes ask)
-- `llama-bench -m ...UD-Q4_K_M.gguf -p 512 -n 128` (non-interactive; interactive `llama-cli` hung).
-- Compare `tg` (decode) and `pp` (prefill) on the same GPU/file.
-
-### 5. Validate chunked prefill gate removal (`29a306ec6`)
-- Compares `chunk_size=32` vs forced `chunk_size=1` token-identical output, then prefill ms. Restore the gate if regression.
-
-### 6. (Later) DeltaNet / BEAM_CACHE / MTP — see plan P1/P5/P6 in progress.md.
-
-## How to read this tree
-
-```
-docs/
-  ACTIVE.md            <- THIS FILE. Start here every session.
-  progress.md          <- timeline of all sessions + results (append here)
-  kernels-explained.md <- how the custom kernels work (reference)
-  sessions/            <- frozen session notes, numbered; read for context/evidence
-    01 P0 profile + Q6 plan
-    02 Q6_K build
-    03 Q6_K verified; Unsloth switch
-    04 corrections + Unsloth plan
-    06 NaN FIXED (root cause + diff) — most relevant one for current work
-```
+- `ACTIVE.md` — current state only.
+- `sessions/07-2026-09-05-262k-context-plan.md` — executable next-agent plan.
+- `progress.md` — historical timeline.
+- `kernels-explained.md` — custom-kernel invariants.
+- `sessions/01` through `06` — frozen historical notes; some claims are superseded.
