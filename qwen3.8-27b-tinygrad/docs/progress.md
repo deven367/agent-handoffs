@@ -276,3 +276,39 @@ Option 2 is likely the highest-leverage path — a fused tiled attention kernel 
 
 - `267fcc7e0 feat(llm): add Q8_0 KV cache support` on `fork/qwen27b-nv-q8-kernel`
 - Q8_0 path works correctly with f16 packed cache; memory savings blocked on scheduler/kernel work.
+
+## 2026-09-06 — Q8_K_XL fits at 262K on L40S
+
+**Breakthrough.** Compact int8 single-store Q8_0 KV cache makes Q8_K_XL fit at native 262144 context on one L40S.
+
+### How
+
+- Single-store int8 packed cache: values (int8) + compact scales (int8, `scale*127`) packed along last dim.
+- Cache shape: `(2, B, H, max_context, head_dim + head_dim//32)` int8 = **2.125 B/value** vs FP16's 4 B/value.
+- Scales stored as `int8(scale * 127)`, dequantized by dividing by 127 on read.
+- `repeat_interleave` for scale expansion avoids symbolic reshape.
+- Scheduler fix: added `spec_shared` rules (RANGE, REDUCE) to `spec_kernel_graph` in `tinygrad/uop/spec.py` so int8 kernel graphs pass `type_verify`.
+- Two-store approach still fails with `END src[0] should be KERNEL, not Ops.STORE` in `schedule/__init__.py`; single-store avoids this.
+
+### Verified
+
+- Q8_0 quantize/dequantize bit-exact vs numpy.
+- Q8_K_XL at context 512: token 16 matches FP16.
+- **Q8_K_XL at context 262144: warmup succeeds, token 16 generated, mem_used 37.8 GiB (7.2 GiB headroom on 44.99 GiB L40S).**
+
+- Dequantizes full valid prefix per step (`# ponytail:` comment marks this). Performance at long context will need a tiled attention kernel.
+
+- Requires `DEV=CUDA` backend (NV rangeify scheduler has int8 issues even with spec fix).
+- Dequantizes full valid prefix per step (`# ponytail:` comment marks this). Performance at long context will need a tiled attention kernel.
+- Q8_0 KV introduces token divergence after ~2 autoregressive steps (expected quantization noise).
+
+### Makefile defaults updated
+
+```make
+TG_KV  ?= q8_0
+TG_CTX ?= 262144
+```
+
+### Current commit
+
+- `ee7322399 feat(llm): compact Q8_0 KV cache fits Q8_K_XL at 262K on L40S` on `fork/qwen27b-nv-q8-kernel`

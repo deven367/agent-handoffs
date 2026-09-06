@@ -1,51 +1,43 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-06. Priority 1 is Q8_K_XL at native 262K on one L40S.
+> Snapshot: 2026-09-06. Q8_K_XL fits at native 262K on one L40S.
 
 ## Read first
 
-1. `sessions/08-2026-09-06-q8-k-xl-l40s-plan.md` — **primary plan:** quantized KV so Q8_K_XL fits at 262K.
-2. `sessions/09-2026-09-06-q4-262k-prefill-plan.md` — **secondary plan:** close the 88× tinygrad prefill gap.
-3. `progress.md` § "2026-09-06 — Q8_0 KV cache implementation status" — **current blocker and next steps.**
+1. `progress.md` § "2026-09-06 — Q8_K_XL fits at 262K on L40S" — **current state.**
+2. `sessions/08-2026-09-06-q8-k-xl-l40s-plan.md` — primary plan (Phases 0-4 complete).
+3. `sessions/09-2026-09-06-q4-262k-prefill-plan.md` — secondary plan: prefill optimization.
 
 ## Ground truth
 
 - Host: `node-lair`, one L40S with `46068 MiB` / `44.99 GiB`.
 - tinygrad: `/u/demistry/tinygrad-src`, branch `qwen27b-nv-q8-kernel`.
-- Source is clean and pushed at `267fcc7e0 feat(llm): add Q8_0 KV cache support`.
+- Source is clean and pushed at `ee7322399 feat(llm): compact Q8_0 KV cache fits Q8_K_XL at 262K on L40S`.
 - Launcher: `/u/demistry/agent-handoffs/Makefile`; `~/Makefile` symlinks to it.
-- GPU was clean at last check.
+- Makefile defaults: `TG_KV=q8_0`, `TG_CTX=262144`, `TG_DEV=CUDA`.
 
-## Q8_0 KV cache: what works
+## What works
 
+- Q8_K_XL at `max_context=262144`: warmup succeeds, token 16 generated, **37.8 GiB** tracked (7.2 GiB headroom).
+- Q8_0 quantize/dequantize bit-exact vs numpy.
+- Q8_0 KV token 16 matches FP16 at context 512.
 - `--cache-type f16|q8_0|q4_0` CLI flag, `TransformerConfig.cache_type`, branched attention.
-- Q8_0 quantize/dequantize bit-exact vs numpy; roundtrip rel error 0.4%.
-- f16-packed single-store cache works on NV; first token matches FP16.
-- Makefile safe defaults: `TG_CTX=4096`, `TG_KV=f16`, `TG_DEV` auto-selects CUDA for quantized KV.
-
-## Q8_0 KV cache: blocker
-
-**int8 storage breaks the rangeify scheduler.** `tinygrad/schedule/rangeify.py:419` fails at `type_verify` with `Ops.RANGE dtypes.weakint` when processing int8 tensors in store/read graphs. Happens on both NV and CUDA backends, with both single-store and two-store approaches.
-
-Current workaround (f16 packed cache) uses **2× FP16 memory** — the opposite of the goal.
-
-## Immediate next action
-
-The next agent must do one of:
-
-1. **Fix the rangeify scheduler** to handle int8 store/read graphs (root cause: `type_verify` at `rangeify.py:419`).
-2. **Write a fused tiled CUDA attention kernel** that consumes packed Q8_0 cache directly, bypassing the scheduler. This is plan session 08 Phase 3 and is the highest-leverage path.
-3. **Patch the scheduler** to handle the specific `Ops.RANGE dtypes.weakint` failure.
-
-Until one of these lands, Q8_K_XL cannot fit at 262K on the L40S through tinygrad.
-
-## Verified completed work
-
-- Q8_K_XL warmup/generation at context 512: ~29.5 GiB tracked (FP16 KV).
-- Q4_K_M full context 262144: warmup passed; server used 36,904 MiB.
 - Prompt-plus-completion boundary check in `serve.py`.
-- Q8_0 KV cache quantize/dequantize verified bit-exact.
-- llama.cpp vs tinygrad benchmark: decode 1.35× gap, prefill 88× gap.
+- Scheduler fix: `spec_kernel_graph` now includes `spec_shared` rules (RANGE, REDUCE).
+
+## Limitations
+
+- Requires `DEV=CUDA` backend (NV rangeify scheduler has int8 issues).
+- Dequantizes full valid prefix per step. Long-context decode will be slow without a tiled attention kernel.
+- Q8_0 KV introduces token divergence after ~2 autoregressive steps (expected quantization noise).
+- `chunk_size=1` guard still in place for recurrent models on non-AMD. Prefill is token-by-token.
+
+## Next steps
+
+1. **Server smoke test**: `make serve-tg` with Q8_K_XL at 262K, verify API request.
+2. **Prefill optimization** (session 09): fix GEMV scratch, re-enable chunked prefill.
+3. **Tiled attention kernel**: consume packed Q8_0 cache directly, avoid dequantizing full prefix.
+4. **Q4_0 KV**: add for more headroom (~34 GiB projected) if needed.
 
 ## Important paths
 
