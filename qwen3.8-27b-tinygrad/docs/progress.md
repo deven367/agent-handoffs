@@ -359,3 +359,45 @@ TG_DEV  ?= NV
 
 - `ee7322399` tinygrad (model.py + spec.py)
 - `dd39c0f` agent-handoffs (Makefile: NV default, TG_KV_FLAG, TG_DEV)
+
+## 2026-09-06 — Prefill investigation: NVRTC codegen blocks chunked recurrent scan
+
+### Finding
+
+Removed the `chunk_size=1` guard and tested chunk_size=2 and 4. Even chunk_size=2 fails with `NVRTC_ERROR_COMPILATION: expected a "}"` on both NV and CUDA backends.
+
+### Root cause
+
+The GatedDeltaNet recurrent scan on non-AMD backends unrolls in Python:
+
+```python
+for t in range(T_pad):
+    s1 = state * alpha[:, :, t]
+    delta = (v[:, :, t] - (s1*k[:, :, t]).sum(-1, keepdim=True)) * beta[:, :, t]
+    state = s1 + delta * k[:, :, t]
+    outs.append((state * q[:, :, t]).sum(-1))
+```
+
+With `T_pad=2`, this creates a kernel `r_3_4_8_16_2_4_28start_pos2Btoks29` with unmatched braces — the generated CUDA source is malformed. The kernel is too complex for tinygrad's NV codegen to emit correctly.
+
+This is NOT a memory issue (OOM never occurs — compilation fails first). It's a codegen limitation.
+
+### What doesn't work
+
+- chunk_size=2: NVRTC compilation error (malformed source)
+- chunk_size=4: NVRTC compilation error (malformed source)
+- Both FP16 and Q8_0 KV: same error
+- Both Q4_K_M and Q8_K_XL models: same error
+- Both NV and CUDA backends: same error
+
+### What's needed (in order of complexity)
+
+1. **Port `gated_delta_prefill` to NV** (plan 09 Phase 4): AMD has a fused kernel that does the entire scan in one custom kernel. Port it to NV using warp reduction primitives from `nv.py`. This bypasses the codegen issue entirely.
+2. **Split the JIT graph**: separate the Linear projections (batchable) from the recurrent scan (sequential) into separate kernels. The Linears process `T_pad` tokens; the scan stays at T=1 per iteration.
+3. **Fix the codegen**: investigate why the NV renderer drops the closing brace on large kernels. May be a buffer size limit in `tinygrad/renderer/cuda.py` or the NVRTC bindings.
+
+Option 1 is the highest-leverage path — it's also needed for decode performance (the unrolled scan is slow even at T=1). The AMD `gated_delta_prefill` kernel source is in `kernels/amd.py`.
+
+### Guard restored
+
+The `chunk_size=1` guard remains in place. Prefill is 13.2 tok/s (token-by-token at decode speed). This is the 190× gap vs llama.cpp's 2541 tok/s.
