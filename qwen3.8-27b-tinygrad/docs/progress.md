@@ -245,3 +245,34 @@ Same model (`Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf`), same GPU (L40S, 46068 MiB), 
 - tinygrad decode: Q4_K custom GEMV 19.9 ms (55%), Q6_K custom 7.4 ms (19.4%), generic SSM/reduce 7.2 ms (19.8%). Total ~39.7 ms/step (includes overhead).
 - llama.cpp decode: MTP speculative decode (~1.75× measured separately), flash attention, optimized GEMV.
 - tinygrad prefill: `chunk_size=1` guard prevents batched prefill. Removing it causes symbolic 32-token GEMV scratch to OOM. This is the largest gap to close.
+
+## 2026-09-06 — Q8_0 KV cache implementation status
+
+### Completed
+
+- `--cache-type f16|q8_0|q4_0` CLI flag added; `TransformerConfig.cache_type` field; `TransformerBlock` branched attention path.
+- Q8_0 quantize/dequantize helpers (`_q8_0_quantize_kv`, `_q8_0_dequantize_kv`) verified bit-exact vs numpy reference on zero, extrema, normal, and HDR inputs. Roundtrip relative error: 0.4% (expected Q8_0).
+- Self-test at `/tmp/test_q8_kv.py` passes all cases when cache is realized (production path).
+- Makefile: `TG_KV ?= f16`, `TG_DEV` auto-selects CUDA for quantized KV, `TG_CTX ?= 4096` safe default.
+- Full-model A/B at context 512: FP16 first token 16, Q8_0 first token 16 (match). Tokens diverge after ~2 autoregressive steps (16,17,24,25... vs 16,17,18,19...). This is expected Q8_0 quantization noise accumulating over steps.
+
+### Blocker: int8 storage breaks rangeify scheduler
+
+- The actual memory savings require int8 cache storage (1 byte/value + 0.0625 bytes/value for scales = 1.0625 B/value vs FP16's 2 B/value).
+- **Single-store int8 packed cache**: `RuntimeError: UOp verification failed at 14 on Ops.RANGE dtypes.weakint` on both NV and CUDA backends.
+- **Two-store int8 (separate values + scales)**: same scheduler error on both backends.
+- **f16 packed single-store** (values + expanded scales as float16): works on NV, but uses 4×f16 = 2× FP16 memory — worse than baseline.
+- The rangeify scheduler in `tinygrad/schedule/rangeify.py:419` fails at `type_verify` when processing int8 tensors in store/read graphs with symbolic dimensions.
+
+### What the next agent must do
+
+1. **Fix the rangeify scheduler** to handle int8 store/read graphs, OR
+2. **Write a custom CUDA kernel** that fuses quantize+store+dequantize+attention, bypassing the scheduler entirely, OR
+3. **Patch `tinygrad/schedule/rangeify.py`** to handle the `Ops.RANGE dtypes.weakint` case that fails.
+
+Option 2 is likely the highest-leverage path — a fused tiled attention kernel that consumes packed Q8_0 cache directly, as described in plan session 08 Phase 3. This bypasses the scheduler issue entirely and avoids the dequantize-full-prefix-per-step memory cost.
+
+### Current commit
+
+- `267fcc7e0 feat(llm): add Q8_0 KV cache support` on `fork/qwen27b-nv-q8-kernel`
+- Q8_0 path works correctly with f16 packed cache; memory savings blocked on scheduler/kernel work.
