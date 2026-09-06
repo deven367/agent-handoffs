@@ -360,43 +360,45 @@ TG_DEV  ?= NV
 - `ee7322399` tinygrad (model.py + spec.py)
 - `dd39c0f` agent-handoffs (Makefile: NV default, TG_KV_FLAG, TG_DEV)
 
-## 2026-09-06 — Prefill investigation: NVRTC codegen blocks chunked recurrent scan
+## 2026-09-06 — Prefill investigation: malformed CUDA confirmed at chunk size 2
 
-### Finding
+### Verified reproduction
 
-Removed the `chunk_size=1` guard and tested chunk_size=2 and 4. Even chunk_size=2 fails with `NVRTC_ERROR_COMPILATION: expected a "}"` on both NV and CUDA backends.
+From clean tinygrad commit `ee7322399`, an isolated Git worktree removed only the
+non-AMD recurrent `chunk_size=1` guard. Q4_K_M, FP16 KV, `max_context=512`,
+`DEV=CUDA`, and `chunk_size=2` reproduced:
 
-### Root cause
-
-The GatedDeltaNet recurrent scan on non-AMD backends unrolls in Python:
-
-```python
-for t in range(T_pad):
-    s1 = state * alpha[:, :, t]
-    delta = (v[:, :, t] - (s1*k[:, :, t]).sum(-1, keepdim=True)) * beta[:, :, t]
-    state = s1 + delta * k[:, :, t]
-    outs.append((state * q[:, :, t]).sum(-1))
+```text
+NVRTC_ERROR_COMPILATION
+At end of source: error: expected a "}"
+<null>(7): note #3196-D: to match this "{"
 ```
 
-With `T_pad=2`, this creates a kernel `r_3_4_8_16_2_4_28start_pos2Btoks29` with unmatched braces — the generated CUDA source is malformed. The kernel is too complex for tinygrad's NV codegen to emit correctly.
+The worker compiler captured the exact input for
+`r_3_4_8_16_2_4_28start_pos2Btoks29`. It is 2,904 bytes / 51 lines, with 8
+opening braces and 7 closing braces; parentheses are balanced 190/190. The source
+opens two nested `for` loops but contains only one closing brace after the inner
+loop. Independent `nvcc -arch=sm_89 -ptx` compilation fails with the same
+end-of-source error. This confirms malformed generated CUDA, not an NVRTC-only
+diagnostic.
 
-This is NOT a memory issue (OOM never occurs — compilation fails first). It's a codegen limitation.
+### Scope corrections
 
-### What doesn't work
+- Verified: Q4_K_M, FP16 KV, CUDA backend, `chunk_size=2`.
+- Not verified here: `chunk_size=4`, Q8_K_XL, Q8_0 KV, or the direct NV backend.
+  The earlier blanket claim covering all combinations was unsupported.
+- The captured kernel is small, so there is no evidence for a renderer buffer-size
+  limit or that it is “too complex.” The specific attribution to the Python
+  GatedDeltaNet scan remains unproven.
+- `chunk_size=32` is a separate failure: 147 kernels compiled and began executing,
+  then allocation of 340 MiB failed at 43.75 GiB used. Memory remains a blocker;
+  the earlier “OOM never occurs” statement was false.
 
-- chunk_size=2: NVRTC compilation error (malformed source)
-- chunk_size=4: NVRTC compilation error (malformed source)
-- Both FP16 and Q8_0 KV: same error
-- Both Q4_K_M and Q8_K_XL models: same error
-- Both NV and CUDA backends: same error
+### Next diagnosis
 
-### What's needed (in order of complexity)
-
-1. **Port `gated_delta_prefill` to NV** (plan 09 Phase 4): AMD has a fused kernel that does the entire scan in one custom kernel. Port it to NV using warp reduction primitives from `nv.py`. This bypasses the codegen issue entirely.
-2. **Split the JIT graph**: separate the Linear projections (batchable) from the recurrent scan (sequential) into separate kernels. The Linears process `T_pad` tokens; the scan stays at T=1 per iteration.
-3. **Fix the codegen**: investigate why the NV renderer drops the closing brace on large kernels. May be a buffer size limit in `tinygrad/renderer/cuda.py` or the NVRTC bindings.
-
-Option 1 is the highest-leverage path — it's also needed for decode performance (the unrolled scan is slow even at T=1). The AMD `gated_delta_prefill` kernel source is in `kernels/amd.py`.
+Minimize this reduction kernel and inspect range/loop lowering before proposing a
+fused kernel. After source generation is fixed, the chunk-32 allocation peak still
+requires its own fix.
 
 ### Guard restored
 
