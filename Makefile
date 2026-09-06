@@ -89,7 +89,7 @@ bench:
 TG_KV      ?= q8_0
 TG_KV_FLAG ?= $(if $(filter-out f16,$(TG_KV)),--cache-type $(TG_KV),)
 TG_MODEL   ?= /scratch/local/demistry/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
-TG_DEV     ?= $(if $(filter-out f16,$(TG_KV)),CUDA,NV)
+TG_DEV     ?= NV
 TG_CTX     ?= 262144
 TG_PORT    ?= 8888
 TG_LOGFILE ?= /tmp/tinygrad-server.log
