@@ -221,3 +221,27 @@ bench_generic.py,HANDOFF_Q4K.md,progress_remote.md}
 - BEAM_CACHE patch (tinygrad/codegen/opt/postrange.py): opt-in persistent beam-schedule cache,
   key = normalized AST key + renderer target + BEAM_ESTIMATE + TF32. Train `BEAM_CACHE=1 BEAM=2`,
   replay `BEAM_CACHE=1`. **Still unverified** (training never completed; /tmp wipes).
+
+## 2026-09-06 — Apples-to-apples llama.cpp vs tinygrad benchmark
+
+Same model (`Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf`), same GPU (L40S, 46068 MiB), 3 repetitions.
+
+| Engine | KV | pp512 (tok/s) | tg128 (tok/s) | Decode ms/tok | VRAM |
+|---|---|---:|---:|---:|---:|
+| llama.cpp (f16 KV) | f16 | 2532.5 | 38.86 | 25.7 ms | ~17.1 GiB |
+| llama.cpp (q4_0 KV) | q4_0 | 2503.4 | 38.49 | 26.0 ms | ~16.8 GiB |
+| tinygrad | f16 | 28.5 | 28.7 | 34.8 ms | 16.6 GiB |
+
+### Findings
+
+- **Decode**: llama.cpp is 1.35× faster (38.9 vs 28.7 tok/s). Gap is ~8.9 ms/token.
+- **Prefill**: llama.cpp is 88× faster (2533 vs 28.5 tok/s). tinygrad forces `chunk_size=1` for recurrent models on non-AMD, so prefill is token-by-token at decode speed.
+- **VRAM**: comparable; tinygrad 16.6 GiB vs llama.cpp ~17.1 GiB (f16 KV) or ~16.8 GiB (q4_0 KV).
+- **KV cache**: llama.cpp supports Q4_0/Q8_0/f16 KV; tinygrad is FP16-only. At 262K context this is the fitting gap: Q4_0 KV is 4.8 GiB vs FP16 KV 16 GiB.
+- KV type barely affects llama.cpp decode speed (38.86 vs 38.49 tok/s); the bottleneck is weight dequantization, not KV bandwidth.
+
+### Bottlenecks (from prior profiling)
+
+- tinygrad decode: Q4_K custom GEMV 19.9 ms (55%), Q6_K custom 7.4 ms (19.4%), generic SSM/reduce 7.2 ms (19.8%). Total ~39.7 ms/step (includes overhead).
+- llama.cpp decode: MTP speculative decode (~1.75× measured separately), flash attention, optimized GEMV.
+- tinygrad prefill: `chunk_size=1` guard prevents batched prefill. Removing it causes symbolic 32-token GEMV scratch to OOM. This is the largest gap to close.
