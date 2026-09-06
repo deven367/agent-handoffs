@@ -312,3 +312,50 @@ TG_CTX ?= 262144
 ### Current commit
 
 - `ee7322399 feat(llm): compact Q8_0 KV cache fits Q8_K_XL at 262K on L40S` on `fork/qwen27b-nv-q8-kernel`
+
+## 2026-09-06 — NV backend works, end-to-end server verified, benchmarks
+
+### NV backend
+
+The spec fix (`spec_kernel_graph += spec_shared`) also fixes the NV rangeify scheduler. int8 Q8_0 cache now works on both NV and CUDA. Switched default to NV (faster compilation: 46s vs 70s warmup).
+
+### End-to-end server verified on NV
+
+- `make serve-tg` starts Q8_K_XL at 262144 with Q8_0 KV on NV in 46s.
+- VRAM: 42,527 MiB (42.0 GiB, 2.9 GiB headroom).
+- Chat completion: `"Hello!"` with reasoning, `finish_reason=stop`.
+- Boundary check: 53 + 262144 → HTTP 400.
+- `make stop-tg` releases all GPU memory.
+
+### Q8_K_XL apples-to-apples benchmark
+
+Same Q8_K_XL model, same L40S, 3 reps for llama.cpp:
+
+| Engine | Backend | KV | pp512 (tok/s) | tg128 (tok/s) | ms/tok | VRAM |
+|---|---|---|---:|---:|---:|---:|
+| llama.cpp | CUDA | q8_0 | 2541 | 22.4 | 44.7 | 28.3 GiB |
+| llama.cpp | CUDA | q4_0 | 2500 | 22.4 | 44.7 | ~28 GiB |
+| tinygrad | NV | q8_0 | 13.2 | 12.9 | 77 | 29.6 GiB |
+
+### Dequant overhead isolated
+
+| Model | KV | tg (tok/s) | ms/tok |
+|---|---|---:|---:|
+| Q4_K_M | f16 | 27.6 | 36 |
+| Q4_K_M | q8_0 | 27.0 | 37 |
+| Q8_K_XL | q8_0 | 12.9 | 77 |
+
+Q8_0 KV dequant adds only 2% overhead (1 ms/token). The 2× decode slowdown is purely from Q8_K_XL being 2× heavier — weight bandwidth bound.
+
+### Current Makefile defaults
+
+```make
+TG_KV   ?= q8_0
+TG_CTX  ?= 262144
+TG_DEV  ?= NV
+```
+
+### Commits
+
+- `ee7322399` tinygrad (model.py + spec.py)
+- `dd39c0f` agent-handoffs (Makefile: NV default, TG_KV_FLAG, TG_DEV)
