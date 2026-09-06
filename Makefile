@@ -86,7 +86,10 @@ bench:
 	$(HOME)/llama.cpp/build/bin/llama-bench -m $(MODEL) -p 512 -n 128 \
 		--flash-attn on --cache-type-k $(KV) --cache-type-v $(KV) --ubatch-size 2048
 
+TG_KV      ?= q8_0
+TG_KV_FLAG ?= $(if $(filter-out f16,$(TG_KV)),--cache-type $(TG_KV),)
 TG_MODEL   ?= /scratch/local/demistry/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
+TG_DEV     ?= $(if $(filter-out f16,$(TG_KV)),CUDA,NV)
 TG_CTX     ?= 262144
 TG_PORT    ?= 8888
 TG_LOGFILE ?= /tmp/tinygrad-server.log
@@ -96,8 +99,7 @@ TG_CWD     ?= $(HOME)/tinygrad-src
 serve-tg:
 	@test -f $(TG_MODEL) || { echo "tinygrad model not found at $(TG_MODEL)"; exit 1; }
 	@if curl -sf localhost:$(TG_PORT)/health >/dev/null; then echo "tinygrad already running on :$(TG_PORT)"; exit 0; fi
-	@echo "Starting tinygrad on :$(TG_PORT) with $(TG_MODEL)"
-	@cd $(TG_CWD); nohup python3 -m tinygrad.llm --model $(TG_MODEL) --max_context $(TG_CTX) --serve $(TG_PORT) > $(TG_LOGFILE) 2>&1 & echo $$! > $(TG_PIDFILE)
+	@cd $(TG_CWD); nohup env DEV=$(TG_DEV) python3 -m tinygrad.llm --model $(TG_MODEL) --max_context $(TG_CTX) $(TG_KV_FLAG) --serve $(TG_PORT) > $(TG_LOGFILE) 2>&1 & echo $$! > $(TG_PIDFILE)
 	@for i in $$(seq 1 90); do sleep 2; if curl -sf localhost:$(TG_PORT)/health >/dev/null; then echo "tinygrad ready on :$(TG_PORT) ($$i x 2s)"; exit 0; fi; done; echo "startup timeout - check $(TG_LOGFILE)"; exit 1
 
 status-tg:
