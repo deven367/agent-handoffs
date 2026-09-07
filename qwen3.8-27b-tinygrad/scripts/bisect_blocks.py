@@ -19,6 +19,8 @@ MODEL = "/data/user/demistry/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf"
 
 def block_stats(prompt: list[int], cs: int, stop: int):
   model, _ = m.Transformer.from_gguf(MODEL, max_context=512, cache_type="f16")
+  model.prefill_jit.reset()
+  model.rollout_jit.reset()
   stashed: list[Tensor] = []
   names: list[str] = []
 
