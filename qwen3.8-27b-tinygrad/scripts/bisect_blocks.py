@@ -51,9 +51,11 @@ def block_stats(prompt: list[int], cs: int, stop: int):
     token = int(out.numpy().reshape(-1)[0])
   finally:
     Transformer.forward = orig_forward
+  # NOTE: stashed block outputs carry the symbolic toks dim from JIT capture
+  # (max_shape=cs). Shrink dim1 to the bound n_toks, realize, then stat.
   stats = []
   for y in stashed:
-    arr = y.numpy().reshape(-1)
+    arr = y.shrink(((0, 1), (0, n_toks), (0, y.shape[2]))).realize().numpy().reshape(-1)
     stats.append((float(arr.mean()), float(arr.std()), float(arr.min()), float(arr.max())))
   return names, stats, token
 
