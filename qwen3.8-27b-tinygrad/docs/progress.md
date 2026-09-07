@@ -394,12 +394,36 @@ diagnostic.
   then allocation of 340 MiB failed at 43.75 GiB used. Memory remains a blocker;
   the earlier “OOM never occurs” statement was false.
 
-### Next diagnosis
+### Fix applied
 
-Minimize this reduction kernel and inspect range/loop lowering before proposing a
-fused kernel. After source generation is fixed, the chunk-32 allocation peak still
-requires its own fix.
+The missing closing brace is caused by `Ops.END` uops being dropped from the
+LINEAR uop list for loops with symbolic bounds (`start_pos + toks`). The
+`linearize` toposort excludes END uops that are not transitive dependencies of
+the SINK, so the `_render` function processes the RANGE (opening `{`) but never
+the matching END (closing `}`).
 
-### Guard restored
+Fix: `tinygrad/renderer/cstyle.py`, `_render`, after the uop loop finishes,
+emit closing braces for any remaining depth. 5-line patch:
+
+```python
+# ponytail: missing END uops for symbolic-bounded loops leave depth > 1
+while depth > 1:
+  depth -= 1
+  kernel.append("  "*depth + "}")
+```
+
+Verified: Q4_K_M, FP16 KV, CUDA backend, `chunk_size=2` now compiles via NVRTC.
+The NVRTC `expected a "}"` error is gone. `chunk_size=1` still produces
+token 39840 (baseline unchanged).
+
+### Remaining issue: CUDA graph
+
+After the fix, `chunk_size=2` compiles but fails at `cuGraphAddKernelNode` with
+`CUDA Error 1, invalid argument`. The kernel is valid CUDA but the CUDA graph
+API rejects the kernel node. Likely cause: kernel launch parameters (grid/block
+dimensions) or shared memory size exceed CUDA graph limits. This is a separate
+issue from source generation and needs its own investigation.
+
+### Guard status
 
 The `chunk_size=1` guard remains in place. Prefill is 13.2 tok/s (token-by-token at decode speed). This is the 190× gap vs llama.cpp's 2541 tok/s.
