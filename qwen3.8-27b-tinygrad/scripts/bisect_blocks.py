@@ -11,6 +11,7 @@ Usage (on node-lair, from agent-handoffs repo root):
 """
 import sys
 import tinygrad.llm.model as m
+from tinygrad.llm.model import Transformer
 from tinygrad import Tensor
 from tinygrad.uop.ops import UOp
 
@@ -24,20 +25,20 @@ def block_stats(prompt: list[int], cs: int, stop: int):
   stashed: list[Tensor] = []
   names: list[str] = []
 
-  orig_forward = model.forward
+  orig_forward = Transformer.forward
 
-  def hooked_forward(tokens: Tensor, start_pos, temperature: Tensor):
-    x = model.token_embd(tokens).float()
-    for i, block in enumerate(model.blk):
+  def hooked_forward(self, tokens: Tensor, start_pos, temperature: Tensor):
+    x = self.token_embd(tokens).float()
+    for i, block in enumerate(self.blk):
       x = block(x, start_pos)
       if i < stop:
         stashed.append(x)
         names.append(type(block).__name__)
-    logits = model.output(model.output_norm(x[:, -1:]))[:, -1, :]
+    logits = self.output(self.output_norm(x[:, -1:]))[:, -1, :]
     return (logits / temperature.maximum(1e-12)
             - (Tensor.rand_like(logits).maximum(1e-12).log().neg()).log()).argmax(-1, keepdim=True)
 
-  model.forward = hooked_forward.__get__(model, type(model))
+  Transformer.forward = hooked_forward
   try:
     v_start_pos = UOp.variable("start_pos", 0, model.max_context - 1)
     v_toks = UOp.variable("toks", 1, cs)
@@ -50,7 +51,7 @@ def block_stats(prompt: list[int], cs: int, stop: int):
     out = model(toks, sp, temp).realize()
     token = int(out.numpy().reshape(-1)[0])
   finally:
-    model.forward = orig_forward
+    Transformer.forward = orig_forward
   stats = []
   for y in stashed:
     arr = y.numpy().reshape(-1)
