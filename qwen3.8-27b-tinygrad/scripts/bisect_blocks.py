@@ -19,12 +19,10 @@ MODEL = "/data/user/demistry/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf"
 
 
 def block_stats(prompt: list[int], cs: int, stop: int):
-  model, _ = m.Transformer.from_gguf(MODEL, max_context=512, cache_type="f16")
-  model.prefill_jit.reset()
-  model.rollout_jit.reset()
+  # NOTE: Transformer.forward must be patched BEFORE from_gguf constructs the
+  # TinyJit wrappers (TinyJit(self.forward) binds the function at __init__).
   stashed: list[Tensor] = []
   names: list[str] = []
-
   orig_forward = Transformer.forward
 
   def hooked_forward(self, tokens: Tensor, start_pos, temperature: Tensor):
@@ -40,6 +38,7 @@ def block_stats(prompt: list[int], cs: int, stop: int):
 
   Transformer.forward = hooked_forward
   try:
+    model, _ = m.Transformer.from_gguf(MODEL, max_context=512, cache_type="f16")
     v_start_pos = UOp.variable("start_pos", 0, model.max_context - 1)
     v_toks = UOp.variable("toks", 1, cs)
     t = Tensor(list(prompt) + [0] * (model.max_context - len(prompt)), dtype="int32").reshape(1, model.max_context)
