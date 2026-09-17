@@ -26,7 +26,7 @@ _call_count = [0]
 _orig_call = GatedDeltaNetBlock.__call__
 
 
-def _instrumented_attention(self, x: Tensor, start_pos) -> tuple[Tensor, list[Tensor]]:
+def _instrumented_attention(self, x: Tensor, start_pos, pre_norm_x: Tensor | None = None) -> tuple[Tensor, list[Tensor]]:
     """Exact copy of GatedDeltaNetBlock._attention. Returns (result, intermediates).
 
     Intermediates are appended in data-flow order; META records their names/dims
@@ -42,6 +42,8 @@ def _instrumented_attention(self, x: Tensor, start_pos) -> tuple[Tensor, list[Te
 
     def rec(name, t, td):
         META.append((name, td)); inter.append(t)
+
+    if pre_norm_x is not None: rec("pre_norm_x", pre_norm_x, 1)
 
     rec("x_in", x, 1)
 
@@ -126,7 +128,7 @@ def _hooked_call(self, x: Tensor, start_pos) -> Tensor:
 
     @function(precompile=True, allow_implicit=True)
     def _run(x: Tensor, start_pos):
-        attn_out, inter = _instrumented_attention(self, self.attn_norm(x), start_pos)
+        attn_out, inter = _instrumented_attention(self, self.attn_norm(x), start_pos, pre_norm_x=x)
         h = x + attn_out
         result = (h + self._feed_forward(self.ffn_norm(h))).contiguous()
         return (result,) + tuple(inter)
