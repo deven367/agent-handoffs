@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Instrument blk00 GatedDeltaNetBlock._attention: find first diverging intermediate.
 
-Replaces GatedDeltaNetBlock.__call__ for block 0 only — inlines _attention without
-@function so stashed intermediates land in the TinyJit graph (realizable from
-outside). Stashes key intermediates at each stage of the data flow, then compares
-stats between two chunk sizes. The first diverging intermediate names the buggy
-subsystem.
+Preserves @function(precompile=True) for block 0 — intermediates are returned as
+additional @function outputs (CALL UOp gettuple), making them realizable without
+changing compilation behaviour. Stashes key intermediates at each stage of the
+data flow, then compares stats between two chunk sizes. The first diverging
+intermediate names the buggy subsystem.
 
 Usage (on node-lair):
   DEV=CUDA python3 bisect_blk00_internals.py "[1]" 1 2 [tol]
@@ -14,32 +14,36 @@ import sys, functools
 import numpy as np
 import tinygrad.llm.model as m
 from tinygrad.llm.model import Transformer, GatedDeltaNetBlock
-from tinygrad import Tensor
+from tinygrad import Tensor, function
 from tinygrad.uop.ops import UOp
 
 MODEL = "/data/user/demistry/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf"
 
-# Stash: list of (name, tensor, time_dim). time_dim=-1 means no time dimension.
-STASHED: list[tuple[str, Tensor, int]] = []
+# Populated during _attention tracing: list of (name, time_dim).
+# time_dim=-1 means no time dimension (don't shrink).
+META: list[tuple[str, int]] = []
 _call_count = [0]
 _orig_call = GatedDeltaNetBlock.__call__
-_orig_attn = GatedDeltaNetBlock._attention
 
 
-def _stash(name, tensor, time_dim):
-    STASHED.append((name, tensor, time_dim))
+def _instrumented_attention(self, x: Tensor, start_pos) -> tuple[Tensor, list[Tensor]]:
+    """Exact copy of GatedDeltaNetBlock._attention. Returns (result, intermediates).
 
-
-def _instrumented_attention(self, x: Tensor, start_pos) -> Tensor:
-    """Exact copy of GatedDeltaNetBlock._attention with stash points inserted."""
+    Intermediates are appended in data-flow order; META records their names/dims
+    in the same order so the caller can match them after @function returns.
+    """
     B, T, _ = x.shape
     start_pos = start_pos if isinstance(start_pos, UOp) else UOp.variable("start_pos", 0, self.config.max_context-1).bind(start_pos)
     initial = Tensor(start_pos).eq(0)
     is_kda = hasattr(self, "ssm_g_a")
     symbolic = isinstance(T, UOp)
     T_pad = x.max_shape[1]
+    inter: list[Tensor] = []
 
-    _stash("x_in", x, 1)
+    def rec(name, t, td):
+        META.append((name, td)); inter.append(t)
+
+    rec("x_in", x, 1)
 
     # input processing
     x = x.half()
@@ -63,9 +67,9 @@ def _instrumented_attention(self, x: Tensor, start_pos) -> Tensor:
       out_gate = out_gate.pad_to((B, T_pad, self.num_v_heads, self.head_v_dim))
       beta, log_alpha = beta.pad_to((B, T_pad, self.num_v_heads)), log_alpha.pad_to((B, T_pad, *log_alpha.shape[2:]))
 
-    _stash("conv_out", conv_out, 1)
-    _stash("beta_pad", beta, 1)
-    _stash("log_alpha_pad", log_alpha, 1)
+    rec("conv_out", conv_out, 1)
+    rec("beta_pad", beta, 1)
+    rec("log_alpha_pad", log_alpha, 1)
 
     q, k, v = conv_out.split([self.q_dim, self.q_dim, self.conv_channels - 2*self.q_dim], dim=-1)
     qk_eps = 1e-12 if is_kda else 1e-6
@@ -76,11 +80,11 @@ def _instrumented_attention(self, x: Tensor, start_pos) -> Tensor:
     q = q * self.head_k_dim**-0.5
     alpha = log_alpha.transpose(1, 2).exp()
 
-    _stash("q", q, 2)
-    _stash("k", k, 2)
-    _stash("v", v, 2)
-    _stash("alpha", alpha, 2)
-    _stash("beta_tx", beta, 2)
+    rec("q", q, 2)
+    rec("k", k, 2)
+    rec("v", v, 2)
+    rec("alpha", alpha, 2)
+    rec("beta_tx", beta, 2)
 
     # recurrent scan (non-AMD path — CUDA never takes the fused kernel branch)
     state = Tensor(self.recurrent_state.uop.after(conv_state_store))
@@ -88,45 +92,56 @@ def _instrumented_attention(self, x: Tensor, start_pos) -> Tensor:
     alpha = alpha.unsqueeze(-1)
     state = initial.where(0, state.float())
 
-    _stash("state_init", state, -1)
+    rec("state_init", state, -1)
 
     outs = []
     for t in range(T_pad):
       s1 = state * alpha[:, :, t]
       delta = (v[:, :, t] - (s1*k[:, :, t]).sum(-1, keepdim=True)) * beta[:, :, t]
       state = s1 + delta * k[:, :, t]
-      _stash(f"s1_t{t}", s1, -1)
-      _stash(f"delta_t{t}", delta, -1)
-      _stash(f"state_t{t}", state, -1)
+      rec(f"s1_t{t}", s1, -1)
+      rec(f"delta_t{t}", delta, -1)
+      rec(f"state_t{t}", state, -1)
       outs.append((state * q[:, :, t]).sum(-1))
 
     state_store = self.recurrent_state.uop.store(state.cast(self.recurrent_state.dtype).uop)
     core = Tensor(outs[0].stack(*outs[1:], dim=1).contiguous().uop.after(state_store))
 
-    _stash("core", core, 1)
+    rec("core", core, 1)
 
     z = (self.ssm_norm(core) * (out_gate.sigmoid() if is_kda else out_gate.silu())).cast(x.dtype).contiguous()
     if symbolic: z = z[:, :T]
     ret = self.ssm_out(z.reshape(B, T, -1))
 
-    _stash("return", ret, 1)
-    return ret
+    rec("return", ret, 1)
+    return ret, inter
 
 
 def _hooked_call(self, x: Tensor, start_pos) -> Tensor:
-    """Block 0 only: inline _attention without @function so intermediates are
-    in the TinyJit graph. Other blocks delegate to original __call__."""
+    """Block 0 only: preserves @function, returns intermediates as CALL outputs."""
     if _call_count[0] > 0:
         return _orig_call(self, x, start_pos)
     _call_count[0] += 1
     self._init_state(x)
-    h = x + _instrumented_attention(self, self.attn_norm(x), start_pos)
-    return (h + self._feed_forward(self.ffn_norm(h))).contiguous()
+
+    @function(precompile=True, allow_implicit=True)
+    def _run(x: Tensor, start_pos):
+        attn_out, inter = _instrumented_attention(self, self.attn_norm(x), start_pos)
+        h = x + attn_out
+        result = (h + self._feed_forward(self.ffn_norm(h))).contiguous()
+        return (result,) + tuple(inter)
+
+    ret = _run(x, start_pos)
+    # ret[0] is the block result; ret[1:] are intermediates matching META
+    for i, (name, time_dim) in enumerate(META):
+        STASHED.append((name, ret[i + 1], time_dim))
+    return ret[0]
 
 
 def run(prompt: list[int], cs: int) -> tuple[dict, int, int]:
-    global STASHED, _call_count
+    global STASHED, META, _call_count
     STASHED = []
+    META = []
     _call_count = [0]
     GatedDeltaNetBlock.__call__ = _hooked_call
     try:
@@ -232,8 +247,6 @@ def main():
         print(f"*** First diverging intermediate: {first_diverge} ***")
     else:
         print("*** No divergence found — all intermediates match ***")
-        print("NOTE: @function removal for blk00 may have masked the divergence.")
-        print("      The bug may be in how @function handles implicit buffers or compilation.")
 
 
 if __name__ == "__main__":
