@@ -125,6 +125,9 @@ def _hooked_call(self, x: Tensor, start_pos) -> Tensor:
         return _orig_call(self, x, start_pos)
     _call_count[0] += 1
     self._init_state(x)
+    # stash block input OUTSIDE @function — directly in the TinyJit graph.
+    # If this matches but pre_norm_x (inside @function) doesn't, the CALL is the culprit.
+    STASHED.append(("block_input", x, 1))
 
     @function(precompile=True, allow_implicit=True)
     def _run(x: Tensor, start_pos):
