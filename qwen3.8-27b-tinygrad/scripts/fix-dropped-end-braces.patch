@@ -1,0 +1,49 @@
+diff --git a/test/backend/test_renderer_failures.py b/test/backend/test_renderer_failures.py
+index 8f5460d..e91b64e 100644
+--- a/test/backend/test_renderer_failures.py
++++ b/test/backend/test_renderer_failures.py
+@@ -4,6 +4,7 @@ from tinygrad.device import Device, Buffer
+ from tinygrad.dtype import dtypes, ConstType
+ from tinygrad.engine.realize import run_linear
+ from tinygrad.codegen import to_program
++from tinygrad.codegen.late.linearizer import linearize
+ from tinygrad.helpers import prod
+ from tinygrad.renderer.cstyle import CStyleLanguage
+ from tinygrad.renderer.ptx import PTXRenderer
+@@ -75,6 +76,19 @@ class TestCStyleFailures(unittest.TestCase):
+   def test_repeat_and(self): self._test_src_strip_paren(Ops.AND)
+   def test_repeat_sub(self): self._test_src_strip_paren(Ops.SUB, should_strip_paren=False)
+ 
++  def test_loop_body_reached_through_after(self):
++    # linearize only keeps uops reachable from the SINK. a consumer that references the raw STORE through an AFTER
++    # leaves the loop's END out of the linear list, so _render must still close the loop it opened for the RANGE
++    buf = UOp.param(0, dtypes.int, 4)
++    rng = UOp.range(UOp.param(1, dtypes.int, 1).index(UOp.const(0, dtypes.int)).load(), 0)
++    store = buf.index(rng).store(UOp.const(7).cast(dtypes.int))
++    sink = UOp(Ops.SINK, src=(buf.after(store).index(UOp.const(0, dtypes.int)).load(),), arg=KernelInfo())
++    lin = list(linearize(sink))
++    self.assertGreater(sum(u.op is Ops.RANGE for u in lin), 0)
++    src = Device[Device.DEFAULT].renderer.render(lin)
++    self.assertEqual(src.count("{"), src.count("}"))
++    self.assertIn("for (", src)
++
+ @unittest.skipUnless(isinstance(Device[Device.DEFAULT].renderer, WGSLRenderer), "tests for wgsl renderer")
+ class TestWGSLFailures(unittest.TestCase):
+   def test_folded_packed_store(self):
+diff --git a/tinygrad/renderer/cstyle.py b/tinygrad/renderer/cstyle.py
+index 0818438..c4ed2bb 100644
+--- a/tinygrad/renderer/cstyle.py
++++ b/tinygrad/renderer/cstyle.py
+@@ -252,6 +252,12 @@ class CStyleLanguage(Renderer):
+         kernel.append("\n".join("  "*depth + line for line in l.split("\n")))
+         if prefix: c[prefix] += 1  # if it was used, increment
+       if u.op in {Ops.IF, Ops.RANGE}: depth += 1
++    # a linearized uop list can carry a RANGE without its END: linearize only keeps uops reachable from the SINK, and nothing
++    # consumes an END whose loop body is reached through an AFTER (e.g. `buf.after(buf[idx].store(x))`). close the open scopes
++    # so the emitted source stays syntactically valid
++    while depth > 1:
++      depth -= 1
++      kernel.append("  "*depth + "}")
+     del self.r
+ 
+     # NOTE: this relies on bufs dict preserving order
