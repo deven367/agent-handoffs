@@ -1,6 +1,6 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-17. Decode 34.2 tok/s (88% of llama.cpp). Fused GatedDeltaNet scan on CUDA.
+> Snapshot: 2026-09-17. Decode 34.2 tok/s (88% of llama.cpp). Prefill 36.0 tok/s (cs=2). Fused GatedDeltaNet scan on CUDA.
 
 ## Read first
 
@@ -18,6 +18,7 @@
 ## What works
 
 - Decode: **34.2 tok/s** on Q4_K_M (88% of llama.cpp 38.8 tok/s).
+- Prefill: **36.0 tok/s** at cs=2 (1.4% of llama.cpp 2595 tok/s — bottleneck is E_2 kernel count, not GEMV).
 - Fused `gated_delta_prefill` scan kernel on NV/CUDA (was AMD-only).
 - Server: OpenAI-compatible API at `/v1/chat/completions` (streaming + non-streaming).
 - Q8_K_XL fits at `max_context=262144`: 37.8 GiB tracked (7.2 GiB headroom).
@@ -26,25 +27,23 @@
 
 ## Limitations
 
-- **Prefill: 34.2 tok/s vs llama.cpp 2595 tok/s (76× gap).** GEMV kernels don't share weights across tokens; generic matmul path too slow. Needs quantized GEMM kernels.
+- **Prefill: 36.0 tok/s vs llama.cpp 2595 tok/s (72× gap).** Bottleneck is 936 E_2 element-wise kernels (20+ ms inter-kernel overhead), NOT the GEMV (0.073 ms/layer constant). GEMV per-token throughput is 10× better than llama.cpp.
 - Requires `DEV=CUDA` backend (NV rangeify scheduler has int8 issues).
-- Server uses `chunk_size=1` (multi-token prefill graph OOMs at cs=32).
+- Server uses `chunk_size=2` (cs≥4 causes VRAM pressure from graph intermediates).
 - Dequantizes full valid prefix per step. Long-context decode slow without tiled attention.
 
 ## Next steps
 
-1. **Quantized GEMM kernels for prefill** — batched Q4_K/Q6_K GEMM (biggest gap).
-2. **Flash attention for standard blocks** — enable `flash_attention` on NV (model.py:219, currently AMD-only).
-3. **Q8_K_XL server smoke test** at 262K context.
-4. **Tiled attention kernel** — consume packed Q8_0 cache directly.
+1. **Port `flash_attention` to NV/CUDA** — eliminates ~480 of 936 E_2 kernels. Est. decode: ~50 tok/s.
+2. **Reduce E_2 kernel count via fusion** — 456 remaining from norm/FFN/residual ops.
+3. **Per-layer graph compilation** — enable cs=8/16/32 without OOM via intermediate reuse.
+4. **Q8_K_XL server smoke test** at 262K context.
+5. **Tiled attention kernel** — consume packed Q8_0 cache directly.
 
 ## Benchmark (2026-09-17, Q4_K_M, L40S, f16 KV, ctx=512)
 
 | Engine | Decode tok/s | Prefill tok/s | VRAM |
-|---|---:|---:|---:|
-| llama.cpp | 38.83 | 2595 | 15.65 GiB |
-| tinygrad | 34.17 | 34.17 | 17.17 GiB |
-
+| tinygrad | 34.17 | 36.0 | 17.17 GiB |
 ## Important paths
 
 ```text
