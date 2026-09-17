@@ -1,18 +1,19 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-06. Q8_K_XL fits at native 262K on one L40S.
+> Snapshot: 2026-09-17. Chunked prefill scan logic verified correct; divergence is JIT noise.
 
 ## Read first
 
-1. `progress.md` § "2026-09-06 — Q8_K_XL fits at 262K on L40S" — **current state.**
-2. `sessions/08-2026-09-06-q8-k-xl-l40s-plan.md` — primary plan (Phases 0-4 complete).
-3. `sessions/09-2026-09-06-q4-262k-prefill-plan.md` — secondary plan: prefill optimization.
+1. `handoff-2026-09-17-blk00-internals-bisect.md` — **latest: scan correct, divergence is token embd JIT noise.**
+2. `progress.md` § "2026-09-06 — Q8_K_XL fits at 262K on L40S" — Q8_K_XL milestone.
+3. `sessions/08-2026-09-06-q8-k-xl-l40s-plan.md` — primary plan (Phases 0-4 complete).
+4. `sessions/09-2026-09-06-q4-262k-prefill-plan.md` — secondary plan: prefill optimization.
 
 ## Ground truth
 
 - Host: `node-lair`, one L40S with `46068 MiB` / `44.99 GiB`.
 - tinygrad: `/u/demistry/tinygrad-src`, branch `qwen27b-nv-q8-kernel`.
-- Source is clean and pushed at `ee7322399 feat(llm): compact Q8_0 KV cache fits Q8_K_XL at 262K on L40S`.
+- Source is clean and pushed at `8dbe2d1ef revert: modulo T_actual indexing in recurrent scan was incorrect`.
 - Launcher: `/u/demistry/agent-handoffs/Makefile`; `~/Makefile` symlinks to it.
 - Makefile defaults: `TG_KV=q8_0`, `TG_CTX=262144`, `TG_DEV=CUDA`.
 
@@ -30,14 +31,16 @@
 - Requires `DEV=CUDA` backend (NV rangeify scheduler has int8 issues).
 - Dequantizes full valid prefix per step. Long-context decode will be slow without a tiled attention kernel.
 - Q8_0 KV introduces token divergence after ~2 autoregressive steps (expected quantization noise).
-- `chunk_size=1` guard still in place for recurrent models on non-AMD. Prefill is token-by-token.
+- Chunked prefill scan logic verified correct (padded steps are no-ops), but `chunk_size=1` guard still in place.
+- Different `toks` JIT ranges produce small numerical noise (~1e-4) from `_embedding_fwd` one-hot reduction; amplified through 64 layers, can flip greedy argmax.
 
 ## Next steps
 
-1. **Server smoke test**: `make serve-tg` with Q8_K_XL at 262K, verify API request.
-2. **Prefill optimization** (session 09): fix GEMV scratch, re-enable chunked prefill.
-3. **Tiled attention kernel**: consume packed Q8_0 cache directly, avoid dequantizing full prefix.
-4. **Q4_0 KV**: add for more headroom (~34 GiB projected) if needed.
+1. **Re-enable chunked prefill**: Remove `chunk_size=1` guard — scan logic is verified correct.
+2. **Verify argmax flip is benign**: Check top-K logits cs=1 vs cs=2 on several prompts.
+3. **Server smoke test**: `make serve-tg` with Q8_K_XL at 262K, verify API request.
+4. **Tiled attention kernel**: consume packed Q8_0 cache directly, avoid dequantizing full prefix.
+5. **Q4_0 KV**: add for more headroom (~34 GiB projected) if needed.
 
 ## Important paths
 
