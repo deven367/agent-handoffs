@@ -43,23 +43,29 @@ custom GEMV kernels are used instead, so no matmul is ever scheduled.
 
 llama.cpp prefill reaches 2424 tok/s because cuBLAS batched GEMM runs on tensor cores.
 
-## Root cause B — no amortization: graph-node count tracks tokens, not steps
+## Root cause B — per-node latency, not node count, sets prefill cost
 
-`DEBUG=2` graph-node counts (`JIT GRAPHing batch with N kernels`):
+`DEBUG=2` graph-node counts, measured on H100 in the same session:
 
-| | nodes per step | tokens per step | nodes per token |
-|---|---:|---:|---:|
-| decode (T=1) | 1405 | 1 | **1405** |
-| prefill cs=2 | 2556 | 2 | **1278** |
+| | nodes per step | tokens per step | nodes per token | wall per step |
+|---|---:|---:|---:|---:|
+| decode (T=1) | 2397 | 1 | 2397 | 23.8 ms |
+| prefill cs=2 | 2556 | 2 | 1278 | 51.7 ms |
 
-Graph nodes scale with **tokens**, not steps — so a prefill chunk costs the same per token as a
-decode step. That is exactly what the wall clock shows (prefill 25.8 ms/token vs decode
-23.8 ms/token on H100). An amortizing implementation (one GEMM over all T tokens, one
-element-wise pass over the chunk) would hold nodes/step roughly constant and drive nodes/token
-down with T; tinygrad does not.
+Node count is ~**constant per step** (adding a second token costs only +159 nodes, +6.6%): the
+graph does amortize. What does *not* amortize is **time per step**, which scales with T.
 
-Corollary: raising the chunk size is the *only* in-model lever, and it is blocked by VRAM
-(cs=32 wants >78 GB for a 17 GB model).
+=> the cost is per-node latency × work, and the work per node grows with T. 2556 nodes over
+51.7 ms is ~20 µs/node, versus ~5.9 µs/node for the decode step's 2397 nodes.
+
+=> per-token cost is therefore flat (25.8 ms prefill vs 23.8 ms decode), and that flat cost is
+~60× llama.cpp's 0.41 ms/token prefill.
+
+Bandwidth is not the limit: the E_2 element-wise traffic at cs=2 is ~76 MB/step (~23 µs at
+3.35 TB/s). Neither is node count — it is the per-node latency floor.
+
+Raising the chunk size would amortize the (already constant) node count across more tokens, and
+is the only in-model lever — but it is blocked by VRAM (cs=32 wants >78 GB for a 17 GB model).
 
 ## Root cause C — decode: fixed per-kernel overhead, not bandwidth
 
