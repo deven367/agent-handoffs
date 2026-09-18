@@ -43,12 +43,30 @@ custom GEMV kernels are used instead, so no matmul is ever scheduled.
 
 llama.cpp prefill reaches 2424 tok/s because cuBLAS batched GEMM runs on tensor cores.
 
-## Root cause B — decode: fixed per-kernel overhead, not bandwidth
+## Root cause B — no amortization: graph-node count tracks tokens, not steps
+
+`DEBUG=2` graph-node counts (`JIT GRAPHing batch with N kernels`):
+
+| | nodes per step | tokens per step | nodes per token |
+|---|---:|---:|---:|
+| decode (T=1) | 1405 | 1 | **1405** |
+| prefill cs=2 | 2556 | 2 | **1278** |
+
+Graph nodes scale with **tokens**, not steps — so a prefill chunk costs the same per token as a
+decode step. That is exactly what the wall clock shows (prefill 25.8 ms/token vs decode
+23.8 ms/token on H100). An amortizing implementation (one GEMM over all T tokens, one
+element-wise pass over the chunk) would hold nodes/step roughly constant and drive nodes/token
+down with T; tinygrad does not.
+
+Corollary: raising the chunk size is the *only* in-model lever, and it is blocked by VRAM
+(cs=32 wants >78 GB for a 17 GB model).
+
+## Root cause C — decode: fixed per-kernel overhead, not bandwidth
 
 Bandwidth alone predicts **220 tok/s** on H100 (3350 GB/s ÷ 15.2 GB). tinygrad gets 42.1.
 Going L40S → H100 multiplies bandwidth by **3.9×** but decode by only **1.23×**.
 
-=> decode is bound by the ~1400-kernel-per-token graph, not by memory. Each of the 936
+=> decode is bound by the ~1400-graph-node chain, not by memory. Each of the 936
 `E_2` element-wise kernels costs ~10 μs of inter-kernel latency inside the CUDA graph.
 
 llama.cpp at 80.9 tok/s (H100) = 12.4 ms/token; tinygrad 23.8 ms/token.
