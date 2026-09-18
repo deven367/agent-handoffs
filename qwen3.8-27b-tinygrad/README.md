@@ -15,6 +15,8 @@ qwen3.8-27b-tinygrad/
     p1-q6k-session5-handoff.md             Q6_K verified; Unsloth switch
     handoff-2026-08-27-unsloth-optimization.md   Unsloth NaN blocker discovery
     handoff-2026-08-27-nan-fixed.md        NaN root cause FIXED (latest state)
+    handoff-2026-09-17-parity-benchmark.md L40S vs llama.cpp head-to-head
+    handoff-2026-09-17-root-cause-analysis.md  H100 session: why the gaps exist (START HERE for perf)
     kernels-explained.md                   human-readable kernel explanations
   kernels/    vendored kernel sources (nv.py, nv_q4k.py, nv_q6k.py, amd-routing.patch)
   scripts/    verifiation scripts (sweeps, proxy A/B)
