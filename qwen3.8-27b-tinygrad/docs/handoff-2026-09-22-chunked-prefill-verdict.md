@@ -29,6 +29,14 @@ Canonical partners: `handoff-2026-09-19-tdep-probe.md`, `ACTIVE.md`, `progress.m
   (`movement.py:211`, `self.ndim=3 != len(arg)=4`) even with the script-side
   workarounds (4-arg-shrink fix, realize-in-numpy, realize-before-zero-state).
   This is a tinygrad graph-internal issue on the 4-D state tensors, not our code.
+- **Flash-attention verification (task 2, step 1)**: JIT=0 DEBUG=2 census of
+  2 decode steps on node-lair H100 = **2397 kernels/step** (matches 09-17 exactly).
+  `flash_decode_partial` fires **16/step** (one per attention block) on CUDA;
+  `gated_delta_prefill` fires 48/step (48 SSM blocks). `E_*` elementwise count is
+  now **436/step** - down from ~936 pre-FA-port, confirming `0f7bd750d` eliminated
+  ~500 kernels as predicted. Decode measured **37.6 tok/s (26.6 ms/tok)** H100.
+  Remaining decode headroom: fuse ~436 `E_*` + ~900 generic `r_*` kernels.
+  Full census: node-lair `/tmp/fadump_raw.txt` (ANSI-strip; line fmt `*** CUDA <n> <name>`).
 
 ## 3. Interpretation
 
