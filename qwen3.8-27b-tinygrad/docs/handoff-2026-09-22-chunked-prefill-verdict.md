@@ -69,25 +69,43 @@ Canonical partners: `handoff-2026-09-19-tdep-probe.md`, `ACTIVE.md`, `progress.m
 | P6 MTP | DEFERRED | low ROI |
 | P7 hygiene | PARTIAL | `tinygrad/llm/gguf_q3k.py` framework; Q3_K route + logit A/B + llama cross-check open |
 
-## 5. Next steps (ranked)
+## 5. Next steps (ranked) — updated 2026-09-22 end-of-session
 
-1. **Read `/tmp/bisect12.log` on node-lair** when PID 3588798 finishes.
-   - Embedding diverges first → accept P0 as "wrong by JIT noise, amplification
-     real"; do NOT re-try the gather patch blind (already reverted once).
-     The fix that would actually bite: realize `token_embd(tokens).float()`
-     before per-chunk JIT capture, or pin one embedding kernel for all `toks`.
-   - Embedding clean → run `bisect_blk00_internals.py`; T_pad conv window
-     is the prime suspect (uncovered by items 1–6).
-2. **Close P0 either way:** the deliverable is a decision, and we have it
-   (cs>=2 unsafe). Write it up, move on — do not burn another session on
-   item 7's tinygrad-internal crash.
-3. **P2 stays off.** Prefill remains 72× behind llama.cpp; root causes are
-   structural (no tensor-core matmul: 6.4 TFLOPS of ~990; ~936 E_2/step),
-   documented in `handoff-2026-09-17-root-cause-analysis.md`.
-4. **Decode (P1/P3 follow-ups):** NV `flash_attention` at T==1, then RMSNorm
-   fusion — see `ACTIVE.md` next steps 2–3.
-5. **P7 leftovers:** Q3_K/IQ4_NL loader, logit-diff A/B, llama.cpp cross-check
-   on the Q4_K_M file, Q8_K_XL 262K smoke re-check.
+DONE this session (do not redo):
+- Bisect landed: diverges at blk00, mean rel 7.09e-01 (cs=1 1.71e-03 vs cs=2 5.87e-03).
+- P0 closed: cs>=2 unsafe on current HEAD (gate + bisect + 09-17 internals agree).
+- `serve.py` verified pinned at `chunk_size=1` (node tree reset to fork HEAD `12e1f301d`).
+- Server smoke: `\n\nParis` on France prompt, port 8000, H100. Server stopped.
+- **Task 2 step 1 (FA verification): DONE.** `flash_decode_partial` fires 16/step
+  on CUDA; `gated_delta_prefill` 48/step; `E_*` down to 436/step (was ~936);
+  decode 37.6 tok/s (26.6 ms/tok) H100 vs llama.cpp 80.9.
+
+REMAINING (in order):
+
+1. **Fuse ~436 `E_*` + ~900 generic `r_*` kernels/step** (decode headroom:
+   37.6 -> target ~50+ tok/s). Top families: `r_16_320` (129), `E_40_32_4` (129),
+   `r_136_32_4_5` (128), `E_320_32_3` (96), `r_3_16_5` (96), `r_16_16_8` (96)
+   - RMSNorm/FFN-gate/residual chains. Engine/codegen work: custom kernels are
+   fusion barriers (measured worse twice). Target the biggest three families first.
+2. **P7 hygiene (mechanical, unblocks Unsloth UD files):** Q3_K(11)/Q8_K(15)/
+   IQ4_NL loader in `tinygrad/llm/gguf.py` `_GGML_QUANT` + `amd.py` routing;
+   complete `tinygrad/llm/gguf_q3k.py` dequant (ggml `dequantize_row_q3_K` bit
+   logic; framework + block layout already there). Verify with
+   `check_q6k_loader.py` pattern on real UD-Q4_K_M bytes.
+3. **logit-diff A/B (not argmax-only)** for every future kernel change:
+   reuse `compare_logits.py`, print full top-5 + max|d| rel, not just argmax.
+4. **llama.cpp cross-check on the Q4_K_M file** (`/N/slate/demistry/llama.cpp/
+   build/bin/llama-bench`) - closes the parity table on the same file.
+5. **Q8_K_XL 262K smoke re-check** on current HEAD (was verified 09-06,
+   37.8 GiB at 262144 ctx; re-check after FA/chunk changes).
+6. **P2 stays off.** Prefill 72x behind llama.cpp; structural causes documented
+   (`handoff-2026-09-17-root-cause-analysis.md`): no tensor-core matmul
+   (6.4 TFLOPS of ~990 peak) + per-node latency floor.
+
+NON-GOALS (do not re-litigate):
+- item 7 `finalize_after` crash: tinygrad-internal, script-side fixes exhausted
+- gather embedding patch: tried 09-17, reverted, did not move divergence
+- cs>=2: gate failed three independent ways (logits, per-block bisect, internals)
 
 ## 6. Environment notes (node-lair H100, verified today)
 
