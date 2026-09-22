@@ -20,10 +20,11 @@ Canonical partners: `handoff-2026-09-19-tdep-probe.md`, `ACTIVE.md`, `progress.m
 
 ## 2. What ran today (node-lair H100, 2026-09-22)
 
-- `tdep_probe.py` items 1–5: embedding, attn_qkv GEMM, ssm_out GEMM, qk dot,
-  eps=1e-12 normalize — all **bit-identical** T=1 vs T=4 (concrete shapes).
-- Item 6 fused scan (zero state): max|d|=9.05e-08, rel 9.39e-04 — expected
-  fp32 rounding noise, matches 09-19 g37 result exactly.
+- `bisect_blocks.py` cs=1 vs cs=2 (24-token prompt): **diverges at blk00
+  (first block), mean rel 7.09e-01** — `a_mean=+1.71e-03` vs `b_mean=+5.87e-03`.
+  (This path stops at first DIVERGE, so it does not separate embedding-noise
+  from blk00-amplification on its own; the 09-17 `bisect_blk00_internals.py`
+  result does: embedding first at rel 3.4e-04, scan/pad/state verified correct.)
 - Item 7 (full blk0 `_attention`): crashes in `Tensor.finalize_after`
   (`movement.py:211`, `self.ndim=3 != len(arg)=4`) even with the script-side
   workarounds (4-arg-shrink fix, realize-in-numpy, realize-before-zero-state).
