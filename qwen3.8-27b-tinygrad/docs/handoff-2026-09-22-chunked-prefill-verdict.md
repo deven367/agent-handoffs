@@ -29,11 +29,6 @@ Canonical partners: `handoff-2026-09-19-tdep-probe.md`, `ACTIVE.md`, `progress.m
   (`movement.py:211`, `self.ndim=3 != len(arg)=4`) even with the script-side
   workarounds (4-arg-shrink fix, realize-in-numpy, realize-before-zero-state).
   This is a tinygrad graph-internal issue on the 4-D state tensors, not our code.
-- `compare_logits.py` 1/2/4: **220s.** cs=2 and cs=4 agree with each other
-  (both wrong) — the T>1 regime is self-consistent but off the cs=1 manifold.
-- `bisect_blocks.py` cs=1 vs cs=2 (24-token prompt): **still running**
-  (PID 3588798, started ~16:55 local; two model loads + JIT, expect ~5 min).
-  Result will land in `/tmp/bisect12.log` on node-lair.
 
 ## 3. Interpretation
 
