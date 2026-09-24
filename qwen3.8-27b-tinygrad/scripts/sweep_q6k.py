@@ -99,7 +99,8 @@ def q_rec(block):
   xh = (block[qhb] >> (2 * ((m // 32).astype(np.uint8)))) & 3
   return (xl | (xh << 4)).astype(np.int64)
 
-def run_kernel(packed, xs, out_features, in_features, device="NV"):
+def run_kernel(packed, xs, out_features, in_features, device=None):
+  if device is None: device = os.environ.get("DEV", "CUDA")
   nblocks = packed.shape[0]
   raw_u8 = Tensor(packed.reshape(-1), dtype=dtypes.uint8, device=device).contiguous().realize()
   buf = raw_u8.uop.buf_uop.buffer
