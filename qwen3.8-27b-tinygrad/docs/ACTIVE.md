@@ -1,12 +1,12 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-24. Decode 38.5 tok/s (H100 NVL). Prefill 36.0 tok/s (cs=1 pinned). Flash attention & GatedDeltaNet scan verified. Activation memoization landed (-240 kernels).
+> Snapshot: 2026-09-24. Decode 41.8 tok/s (H100 NVL). Prefill 36.0 tok/s (cs=1 pinned). Flash attention & GatedDeltaNet scan verified. GEMV memory redundancy root cause identified; cooperative warp blueprint drafted.
 
 ## Read first
 
-1. `handoff-2026-09-24-activation-memoization-and-h100-baseline.md` — **latest: activation memoization landed, H100 decode 38.5 tok/s, llama.cpp parity table, Q8_K_XL 262K verified.**
-2. `handoff-2026-09-22-chunked-prefill-verdict.md` — cs>=2 numerically wrong, serve.py pinned at cs=1, FA decode verified on CUDA.
-3. `handoff-2026-09-17-parity-benchmark.md` — prefill structural gap analysis.
+1. `handoff-2026-09-24-decode-gemv-bandwidth-analysis-and-cooperative-warp.md` — **latest: GEMV memory load redundancy root cause analysis, cooperative warp blueprints for Q4_K and Q6_K, multi-warp evaluation findings, step-by-step implementation plan.**
+2. `handoff-2026-09-24-activation-memoization-and-h100-baseline.md` — activation memoization landed (-240 kernels), H100 decode baseline, llama.cpp parity table, Q8_K_XL 262K verified.
+3. `handoff-2026-09-22-chunked-prefill-verdict.md` — cs>=2 numerically wrong, serve.py pinned at cs=1, FA decode verified on CUDA.
 
 ## Ground truth
 
@@ -17,7 +17,7 @@
 
 ## What works
 
-- Decode: **38.47 tok/s** (25.99 ms/tok) on Q4_K_M (H100 NVL; 53.7% of llama.cpp 71.67 tok/s).
+- Decode: **41.82 tok/s** (23.91 ms/tok) on Q4_K_M (H100 NVL; 58.3% of llama.cpp 71.67 tok/s).
 - Prefill: **36.0 tok/s** at cs=1 (1.65% of llama.cpp 2175.7 tok/s; cs>=2 stays off due to divergence).
 - Fused `gated_delta_prefill` scan kernel on NV/CUDA (48 calls/step).
 - Fused `flash_decode_partial` attention kernel on NV/CUDA (16 calls/step).
@@ -36,10 +36,16 @@
 
 ## Next steps (ranked)
 
-1. **RMSNorm reduction + scaling fusion:** `r_16_320` (129 calls) + `E_40_32_4` (129 calls) = 258 kernels/step. Fusing them removes 129 kernels and ~1.5 ms/tok.
-2. **FFN intermediate reduction fusion:** `r_136_32_4_5` (128 calls/step, ~1.2 ms).
-3. **P7 hygiene:** Q8_K (15) loader in `tinygrad/llm/gguf.py` (`d: float32`, `qs: int8[256]`, `bsums: int16[16]`, 292 bytes/block).
-4. **Per-layer graph compilation:** enable memory reuse across layer boundaries.
+1. **Cooperative Warp Q4_K Kernel (`tinygrad/llm/kernels/nv_q4k.py`):**
+   - Eliminate 50% duplicate weight loads and achieve 100% 128-byte coalescing by having all 32 lanes cooperate on each 256-weight block (thread $t$ loads `raw[base + 4 + t]`).
+   - Expected savings: **~5.5 ms/tok** (bringing decode down from 23.9 ms $\rightarrow$ ~18.4 ms/tok, ~54 tok/s).
+2. **Cooperative Warp Q6_K Kernel (`tinygrad/llm/kernels/nv_q6k.py`):**
+   - Replace 34 scalar 16-bit loads with cooperative warp loads.
+   - Expected savings: **~2.4 ms/tok** (bringing decode down to ~16.0 ms/tok, ~62–64 tok/s).
+3. **RMSNorm reduction + scaling fusion:**
+   - Fuse `r_16_320` (127 calls) + `E_40_32_4` (189 calls) into single-pass RMSNorm.
+   - Expected savings: **~1.8 ms/tok** (bringing decode down to ~14.2 ms/tok, ~70 tok/s).
+4. **P7 hygiene:** Q8_K (15) loader in `tinygrad/llm/gguf.py` (`d: float32`, `qs: int8[256]`, `bsums: int16[16]`, 292 bytes/block).
 
 ## Head-to-Head Parity Benchmark (2026-09-24, Q4_K_M, H100 NVL, f16 KV, ctx=512)
 
