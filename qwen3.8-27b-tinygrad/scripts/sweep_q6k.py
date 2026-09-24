@@ -5,7 +5,7 @@ kernel vs exact-dequant f32 matmul. Run on node-lair (free NV GPU).
 Pass criterion: max absolute error / max reference magnitude <= 1e-4.
 Harness style mirrors /u/demistry/sweep_q4k.py (session 2).
 """
-import sys
+import os, sys
 import numpy as np
 from tinygrad import Tensor, dtypes
 from tinygrad.uop.ops import UOp
