@@ -1,49 +1,54 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-17. Decode 34.2 tok/s (88% of llama.cpp). Prefill 36.0 tok/s (cs=2). Fused GatedDeltaNet scan on CUDA.
+> Snapshot: 2026-09-24. Decode 38.5 tok/s (H100 NVL). Prefill 36.0 tok/s (cs=1 pinned). Flash attention & GatedDeltaNet scan verified. Activation memoization landed (-240 kernels).
 
 ## Read first
 
-1. `handoff-2026-09-17-parity-benchmark.md` — **latest: decode 88% of llama.cpp, prefill gap documented.**
-2. `handoff-2026-09-17-blk00-internals-bisect.md` — scan logic verified correct, divergence is JIT noise.
-3. `progress.md` § "2026-09-06 — Q8_K_XL fits at 262K on L40S" — Q8_K_XL milestone.
+1. `handoff-2026-09-24-activation-memoization-and-h100-baseline.md` — **latest: activation memoization landed, H100 decode 38.5 tok/s, llama.cpp parity table, Q8_K_XL 262K verified.**
+2. `handoff-2026-09-22-chunked-prefill-verdict.md` — cs>=2 numerically wrong, serve.py pinned at cs=1, FA decode verified on CUDA.
+3. `handoff-2026-09-17-parity-benchmark.md` — prefill structural gap analysis.
 
 ## Ground truth
 
-- Host: `node-lair`, one L40S with `46068 MiB` / `44.99 GiB`.
+- Host: `lair-g1` (`node-lair`), NVIDIA H100 NVL with `95830 MiB` / `93.58 GiB`.
 - tinygrad: `/u/demistry/tinygrad-src`, branch `qwen27b-nv-q8-kernel`.
-- Source HEAD: `dd1cb574d fix(llm): use chunk_size=1 in serve.py` (pushed to fork).
+- Source HEAD: `058d3fdfd perf(kernels): memoize q8_quantize activations across parallel projections` (pushed to fork).
 - Launcher: `/u/demistry/agent-handoffs/Makefile`; `~/Makefile` symlinks to it.
 
 ## What works
 
-- Decode: **34.2 tok/s** on Q4_K_M (88% of llama.cpp 38.8 tok/s).
-- Prefill: **36.0 tok/s** at cs=2 (1.4% of llama.cpp 2595 tok/s — bottleneck is E_2 kernel count, not GEMV).
-- Fused `gated_delta_prefill` scan kernel on NV/CUDA (was AMD-only).
-- Server: OpenAI-compatible API at `/v1/chat/completions` (streaming + non-streaming).
-- Q8_K_XL fits at `max_context=262144`: 37.8 GiB tracked (7.2 GiB headroom).
+- Decode: **38.47 tok/s** (25.99 ms/tok) on Q4_K_M (H100 NVL; 53.7% of llama.cpp 71.67 tok/s).
+- Prefill: **36.0 tok/s** at cs=1 (1.65% of llama.cpp 2175.7 tok/s; cs>=2 stays off due to divergence).
+- Fused `gated_delta_prefill` scan kernel on NV/CUDA (48 calls/step).
+- Fused `flash_decode_partial` attention kernel on NV/CUDA (16 calls/step).
+- Activation memoization (`_q8_cache`): eliminated 240 duplicate `nv_q8_quantize` kernels per step (bit-exact parity: `max_rel=0.00e+00`).
+- Server: OpenAI-compatible API at `/v1/chat/completions` (streaming + non-streaming, pinned at `chunk_size=1`).
+- Q8_K_XL fits at `max_context=262144`: 40.6 GiB tracked on H100 (53.4 GiB headroom), verified running token generation.
 - Q8_0 KV cache, `--cache-type f16|q8_0|q4_0` CLI flag.
 - Custom Q4_K/Q6_K/Q8_0 GEMV kernels for decode.
+- Quantitative logit diffing tool in `scripts/compare_logits.py` with top-5 + max abs/rel diff and cosine similarity.
 
 ## Limitations
 
-- **Prefill: 36.0 tok/s vs llama.cpp 2595 tok/s (72× gap).** Bottleneck is 936 E_2 element-wise kernels (20+ ms inter-kernel overhead), NOT the GEMV (0.073 ms/layer constant). GEMV per-token throughput is 10× better than llama.cpp.
-- Requires `DEV=CUDA` backend (NV rangeify scheduler has int8 issues).
-- Server uses `chunk_size=2` (cs≥4 causes VRAM pressure from graph intermediates).
-- Dequantizes full valid prefix per step. Long-context decode slow without tiled attention.
+- **Prefill: 36.0 tok/s vs llama.cpp 2175.7 tok/s (60× gap).** Structural: no tensor-core matmul for prompt evaluation (GEMV constant 0.073 ms/layer) + per-node latency floor.
+- `cs>=2` produces divergent logits (argmax 220 vs correct 271); `serve.py` pinned at `chunk_size=1`.
+- Requires `DEV=CUDA` backend (NVRTC works without setting `CUDA_PATH`).
 
-## Next steps
+## Next steps (ranked)
 
-1. **Port `flash_attention` to NV/CUDA** — eliminates ~480 of 936 E_2 kernels. Est. decode: ~50 tok/s.
-2. **Reduce E_2 kernel count via fusion** — 456 remaining from norm/FFN/residual ops.
-3. **Per-layer graph compilation** — enable cs=8/16/32 without OOM via intermediate reuse.
-4. **Q8_K_XL server smoke test** at 262K context.
-5. **Tiled attention kernel** — consume packed Q8_0 cache directly.
+1. **RMSNorm reduction + scaling fusion:** `r_16_320` (129 calls) + `E_40_32_4` (129 calls) = 258 kernels/step. Fusing them removes 129 kernels and ~1.5 ms/tok.
+2. **FFN intermediate reduction fusion:** `r_136_32_4_5` (128 calls/step, ~1.2 ms).
+3. **P7 hygiene:** Q8_K (15) loader in `tinygrad/llm/gguf.py` (`d: float32`, `qs: int8[256]`, `bsums: int16[16]`, 292 bytes/block).
+4. **Per-layer graph compilation:** enable memory reuse across layer boundaries.
 
-## Benchmark (2026-09-17, Q4_K_M, L40S, f16 KV, ctx=512)
+## Head-to-Head Parity Benchmark (2026-09-24, Q4_K_M, H100 NVL, f16 KV, ctx=512)
 
-| Engine | Decode tok/s | Prefill tok/s | VRAM |
-| tinygrad | 34.17 | 36.0 | 17.17 GiB |
+| Engine | Decode tok/s | Decode ms/tok | Prefill pp512 tok/s | VRAM |
+|---|---:|---:|---:|---:|
+| llama.cpp (flash-attn) | 71.67 | 13.95 ms | 2175.7 | 15.65 GiB |
+| tinygrad (09-22 HEAD) | 37.60 | 26.60 ms | 36.0 | 17.17 GiB |
+| tinygrad (09-24 memoized) | **38.47** | **25.99 ms** | 36.0 | 17.17 GiB |
+
 ## Important paths
 
 ```text
