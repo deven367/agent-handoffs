@@ -1,13 +1,13 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g38` on Quartz). Decode reached **68.64 tok/s (14.57 ms/tok)**, an overall **+78.4% speedup** over 09-24 baseline (saving 11.42 ms/tok). Top-5 logit parity verified with diff $\le 0.0019$ across all 248,320 vocabulary tokens. Task 3 Single-Pass Block-Fused RMSNorm landed (`bd17e6e1c`). Task 2 vectorized cooperative GEMV landed (`c162d326b`). Task 1 reduction heuristic widened (`3a6346f48`).
+> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g38` on Quartz). Decode reached **68.64 tok/s (14.57 ms/tok)**, an overall **+78.4% speedup** over 09-24 baseline (saving 11.42 ms/tok). Top-5 logit parity verified across all 248,320 vocabulary tokens. Task 3 Single-Pass Block-Fused RMSNorm landed (`bd17e6e1c`). Task 2 vectorized cooperative GEMV landed (`c162d326b`). Task 1 reduction heuristic widened (`3a6346f48`).
 
 ## Read first
 
-1. `handoff-2026-09-25-task3-fused-rmsnorm.md` — **LATEST: Task 3 Single-Pass Block-Fused RMSNorm (68.79 tok/s on H100, eliminates 256 reduction kernels, saving 1.57 ms/tok).**
-2. `handoff-2026-09-25-task2-vectorized-q4k-gemv.md` — Task 2 Vectorized Cooperative GEMV (62.06 tok/s on H100, 128-bit/64-bit vector loads).
-3. `handoff-2026-09-25-h100-baseline-and-quartz-setup.md` — Fast-start cheat sheet (one-command make targets), H100 SXM5 benchmark results, 2,060-kernel decode latency breakdown, 0.5B debugging setup, and reduction grouping optimization (Task 1).
-4. `handoff-2026-09-24-l40s-cooperative-warp-and-kernel-census.md` — L40S benchmarks (31.10 tok/s), cooperative warp Q6_K implementation details.
+1. `handoff-2026-09-25-gated-deltanet-normalize-and-next-steps.md` — **LATEST: GatedDeltaNet Normalization Profiling, GPU Clock Dynamics, and Next Optimization Roadmap.**
+2. `handoff-2026-09-25-task3-fused-rmsnorm.md` — Task 3 Single-Pass Block-Fused RMSNorm (eliminates 256 reduction kernels, saving 1.57 ms/tok).
+3. `handoff-2026-09-25-task2-vectorized-q4k-gemv.md` — Task 2 Vectorized Cooperative GEMV (62.06 tok/s on H100, 128-bit/64-bit vector loads).
+4. `handoff-2026-09-25-h100-baseline-and-quartz-setup.md` — Fast-start cheat sheet (one-command make targets), H100 SXM5 benchmark results, 2,060-kernel decode latency breakdown, 0.5B debugging setup.
 5. `handoff-2026-09-17-rmsnorm-experiment.md` — Why earlier black-box custom RMSNorm attempts failed (lack of activation caching and un-memoized custom kernel boundaries).
 
 ## Fast-Start Commands (Root Makefile)
@@ -18,8 +18,8 @@ cd ~/projects/agent-handoffs   # (or /u/demistry/agent-handoffs on Lair)
 
 make info            # Print auto-detected cluster, GPU, paths, and environment settings
 make test-units      # Run both Q4_K and Q6_K cooperative warp unit sweeps (ALL OK)
-make parity          # Verify 27B model logits (top-5 match: [271, 25, 11751, 248044, 57590])
-make bench-tg        # Measure steady-state tinygrad decode throughput (512 ctx, 20 steps -> 68.79 tok/s)
+make parity          # Verify 27B model logits (top-5 match: [271, 25, 11751, 248044, 198])
+make bench-tg        # Measure steady-state tinygrad decode throughput (512 ctx, 20 steps)
 make bench-llama     # Measure reference llama.cpp decode throughput (86.18 tok/s)
 make bench-tg-05b    # Fast-iteration test on 0.5B model (0.18s runtime, 108.33 tok/s)
 make bench-llama-05b # Fast-iteration reference llama.cpp on 0.5B model (919 tok/s)
@@ -30,7 +30,7 @@ make bench-llama-05b # Fast-iteration reference llama.cpp on 0.5B model (919 tok
 - **Active Compute Node**: `g38.quartz.uits.iu.edu` (`ssh g38`), NVIDIA H100 SXM5 80GB HBM3 (3,350 GB/s bandwidth).
 - **Secondary Node**: `lair-g6` (`ssh lair-g6`), NVIDIA L40S 48GB GDDR6 (864 GB/s bandwidth).
 - **tinygrad Workdir**:
-  - Quartz: `$(HOME)/projects/tinygrad-src` (branch `qwen27b-nv-q8-kernel`, HEAD `2132231dd`).
+  - Quartz: `$(HOME)/projects/tinygrad-src` (branch `qwen27b-nv-q8-kernel`, HEAD `bd17e6e1c`).
   - Lair: `/u/demistry/tinygrad-src` (branch `qwen27b-nv-q8-kernel`).
 - **Model Paths**:
   - 27B Q4_K_M (Quartz): `/N/scratch/demistry/models/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf`
