@@ -1,6 +1,6 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g38` on Quartz). Decode reached **68.79 tok/s (14.54 ms/tok)**, an overall **+78.8% speedup** over 09-24 baseline (saving 11.45 ms/tok). Top-5 logit parity verified with diff $\le 0.0019$ across all 248,320 vocabulary tokens. Task 3 Single-Pass Block-Fused RMSNorm landed (`2132231dd`). Task 2 vectorized cooperative GEMV landed (`c162d326b`). Task 1 reduction heuristic widened (`3a6346f48`).
+> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g38` on Quartz). Decode reached **68.64 tok/s (14.57 ms/tok)**, an overall **+78.4% speedup** over 09-24 baseline (saving 11.42 ms/tok). Top-5 logit parity verified with diff $\le 0.0019$ across all 248,320 vocabulary tokens. Task 3 Single-Pass Block-Fused RMSNorm landed (`bd17e6e1c`). Task 2 vectorized cooperative GEMV landed (`c162d326b`). Task 1 reduction heuristic widened (`3a6346f48`).
 
 ## Read first
 

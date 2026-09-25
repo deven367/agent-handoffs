@@ -2,7 +2,7 @@
 
 Date: 2026-09-25  
 Hardware: NVIDIA H100 SXM5 80GB HBM3 (`g38.quartz.uits.iu.edu` on Quartz cluster)  
-Branch: `qwen27b-nv-q8-kernel` (`deven367/tinygrad.git`, commit `2132231dd`)  
+Branch: `qwen27b-nv-q8-kernel` (`deven367/tinygrad.git`, commit `bd17e6e1c`)  
 Handoff branch: `main` (`deven367/agent-handoffs.git`)
 
 ---
