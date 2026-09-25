@@ -4,12 +4,13 @@
 
 ## Read first
 
-1. `handoff-2026-09-25-fused-add-rmsnorm-and-compact-q8.md` — **LATEST: TODO 1+2 Landed (`38342a3be`): fused add+RMSNorm, compact Q8 layout, 73.69 tok/s, clean A/B re-measure, benchmark-hygiene finding, GEMV output-buffer lever.**
-2. `handoff-2026-09-25-actions-1-2-3-completed.md` — Actions 1, 2, and 3 Landed (Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize), Current Gap Analysis, and Unrolling Trap Takeaways (`c14c50207`).
-3. `handoff-2026-09-25-gated-deltanet-normalize-and-next-steps.md` — GatedDeltaNet Normalization Profiling, GPU Clock Dynamics, and Next Optimization Roadmap.
-4. `handoff-2026-09-25-task3-fused-rmsnorm.md` — Task 3 Single-Pass Block-Fused RMSNorm (eliminates 256 reduction kernels, saving 1.57 ms/tok).
-5. `handoff-2026-09-25-task2-vectorized-q4k-gemv.md` — Task 2 Vectorized Cooperative GEMV (62.06 tok/s on H100, 128-bit/64-bit vector loads).
-6. `handoff-2026-09-25-h100-baseline-and-quartz-setup.md` — Fast-start cheat sheet (one-command make targets), H100 SXM5 benchmark results, 2,060-kernel decode latency breakdown, 0.5B debugging setup.
+1. `handoff-2026-09-25-lever-a-compact-gemv-in-progress.md` — **IN PROGRESS: Lever A (compact GEMV output buffers) — design finalized, exact edit list + verification sequence; edits not yet applied.**
+2. `handoff-2026-09-25-fused-add-rmsnorm-and-compact-q8.md` — TODO 1+2 Landed (`38342a3be`): fused add+RMSNorm, compact Q8 layout, 73.69 tok/s, clean A/B re-measure, benchmark-hygiene finding, GEMV output-buffer lever.
+3. `handoff-2026-09-25-actions-1-2-3-completed.md` — Actions 1, 2, and 3 Landed (Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize), Current Gap Analysis, and Unrolling Trap Takeaways (`c14c50207`).
+4. `handoff-2026-09-25-gated-deltanet-normalize-and-next-steps.md` — GatedDeltaNet Normalization Profiling, GPU Clock Dynamics, and Next Optimization Roadmap.
+5. `handoff-2026-09-25-task3-fused-rmsnorm.md` — Task 3 Single-Pass Block-Fused RMSNorm (eliminates 256 reduction kernels, saving 1.57 ms/tok).
+6. `handoff-2026-09-25-task2-vectorized-q4k-gemv.md` — Task 2 Vectorized Cooperative GEMV (62.06 tok/s on H100, 128-bit/64-bit vector loads).
+7. `handoff-2026-09-25-h100-baseline-and-quartz-setup.md` — Fast-start cheat sheet (one-command make targets), H100 SXM5 benchmark results, 2,060-kernel decode latency breakdown, 0.5B debugging setup.
 
 ## Fast-Start Commands (Root Makefile)
 
@@ -71,8 +72,8 @@ Total decode time: ~13.6 ms/tok (73.7 tok/s steady)   [GEMV split from `c14c5020
 
 ## Ranked Next Steps to Close the Remaining ~1.9 ms Gap to llama.cpp (11.65 ms)
 
-1. **Lever A: Compact GEMV output buffers** (largest structural waste remaining):
-   - Every GEMV stores `(rows, 32)` f32 per output row (128 B written, only word 0 read). ~30–40 MB/tok of write waste across 572 calls; up to ~1 ms/tok. Touches all three GEMV families.
+1. **Lever A: Compact GEMV output buffers — IN PROGRESS, see `handoff-2026-09-25-lever-a-compact-gemv-in-progress.md`** (design finalized; exact edit list there):
+   - Every GEMV stores `(rows, 32)` f32 per output row (128 B written, only word 0 read). Fix: duplicate word-0 store from all 32 lanes + `(rows, 1)` buffer. Bandwidth part ≈ 0.15 ms (the "~1 ms" was an overestimate); the real win is the up-to-572 eliminated contiguous-copy kernels — measure with a kernel census.
 2. **TODO 3: Multi-Warp Grid-Fused RMSNorm + Q8 Quantize** (~0.5–0.8 ms/tok):
    - Use a multi-warp grid launch (160 warps) instead of a single-warp loop to avoid Python UOp unrolling register spilling.
 3. **Fused 2nd residual add (`h + ffn_out`) into the next block's `attn_norm`**:
