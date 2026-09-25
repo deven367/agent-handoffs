@@ -50,25 +50,26 @@ make bench-llama-05b # Fast-iteration reference llama.cpp on 0.5B model (919 tok
 | **L40S 48GB** (`lair-g6`) | **llama.cpp** (`llama-bench`) | **37.95 ± 0.28** | **26.35 ms** | 100% | Reference |
 | L40S 48GB (`lair-g6`) | **tinygrad** (Cooperative Warp) | **31.10** | **32.15 ms** | **82.0%** | 0.9980 sim |
 
-## Latency Breakdown of Current 14.54 ms/tok on H100
+## Latency Breakdown & Current Status on H100 (`16c494e99`)
 
 ```text
-Total decode time: 14.54 ms
-├── 1. Quantized GEMV (572 kernels): ~7.7 ms
+Total decode time: ~14.1 ms/tok (~70+ tok/s steady)
+├── 1. Quantized GEMV (572 kernels): ~7.2 ms
 │   ├── Q4_K v4 (444 calls, 128-bit vectorized): ~5.2 ms
 │   ├── Q4_K v2 (64 calls, 64-bit vectorized): ~0.9 ms
-│   └── Q6_K (64 calls, 32-bit cooperative): ~1.6 ms
-└── 2. Non-GEMV Overhead (1,044 kernels): ~6.8 ms
-    ├── Single-Pass RMSNorm (nv_rmsnorm, 257 calls): ~2.6 ms  (down from 4.8 ms)
-    ├── Activation Quantization (nv_q8_quantize, 192 calls): ~1.8 ms
-    └── SwiGLU, RoPE & Residual Additions (~595 calls): ~2.4 ms
+│   └── Q6_K v2 (64 calls, 64-bit vectorized, 1.23x speedup): ~1.1 ms
+└── 2. Non-GEMV Overhead (~853 kernels): ~6.9 ms
+    ├── Single-Pass RMSNorm (nv_rmsnorm, 193 calls): ~2.0 ms
+    ├── Fused QK L2 Norm (nv_normalize, 128 calls): ~0.7 ms  (eliminated 256 r_16_8 & E_* kernels!)
+    ├── Activation Quantization (nv_q8_quantize, 192 calls, 1.19x faster): ~1.5 ms
+    └── SwiGLU, RoPE & Residual Additions (~340 calls): ~2.7 ms
 ```
 
-## Ranked Next Steps to Close the 2.94 ms Gap to llama.cpp
+## Ranked Next Steps to Close the Final ~2.5 ms Gap to llama.cpp (11.60 ms)
 
-1. **Q6_K Vectorization (`tinygrad/llm/kernels/nv_q6k.py`)**:
-   - 64 calls taking ~1.6 ms. Vectorize the cooperative warp with 64-bit loads (`uint2`) following the Task 2 pattern. Expected savings: **~0.5 ms/tok**.
-2. **Fused Residual Add + RMSNorm (`fused_add_rmsnorm`)**:
-   - Fuse `h = x + attn_output` directly into the input of `ffn_norm` to eliminate intermediate elementwise kernels. Expected savings: **~0.6 ms/tok**.
-3. **Activation Quantization Optimization (`nv_q8_quantize`)**:
-   - 192 calls taking ~1.8 ms. Vectorize stores and reduce dispatch overhead. Expected savings: **~0.5 ms/tok**.
+1. **Fused RMSNorm + Q8 Quantization (`nv_rmsnorm_q8`)**:
+   - Fuse `nv_rmsnorm` and `nv_q8_quantize` into a single kernel to eliminate 192 kernel launches and 384 redundant DRAM round-trips. Expected savings: **~1.0–1.2 ms/tok**.
+2. **Fused Residual Add + RMSNorm (`nv_add_rmsnorm`)**:
+   - Fuse residual addition directly into the input of `nv_rmsnorm`, eliminating 64 elementwise kernels and DRAM round-trips. Expected savings: **~0.5–0.7 ms/tok**.
+3. **Vectorized 128-Bit Stores for Q8 Quantize**:
+   - Store 8 uint32 words as two 128-bit `uint4` stores per group. Expected savings: **~0.2–0.4 ms/tok**.
