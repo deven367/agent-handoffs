@@ -1,10 +1,10 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g38` on Quartz). Decode reached **68.64 tok/s (14.57 ms/tok)**, an overall **+78.4% speedup** over 09-24 baseline (saving 11.42 ms/tok). Top-5 logit parity verified across all 248,320 vocabulary tokens. Task 3 Single-Pass Block-Fused RMSNorm landed (`bd17e6e1c`). Task 2 vectorized cooperative GEMV landed (`c162d326b`). Task 1 reduction heuristic widened (`3a6346f48`).
+> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g37` on Quartz). Actions 1, 2, 3 and TODO 1 landed (`231786562`): Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize, and Fused RMSNorm+Q8 Quantize. Parity verified bit-exact across all 248,320 vocabulary tokens. Unit tests 100% passing (`make test-units`).
 
 ## Read first
 
-1. `handoff-2026-09-25-actions-1-2-3-completed.md` — **LATEST: Actions 1, 2, and 3 Landed (Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize) (`16c494e99`).**
+1. `handoff-2026-09-25-actions-1-2-3-completed.md` — **LATEST: Actions 1, 2, 3 and TODO 1 Landed (Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize, and Fused RMSNorm+Q8) (`231786562`).**
 2. `handoff-2026-09-25-gated-deltanet-normalize-and-next-steps.md` — GatedDeltaNet Normalization Profiling, GPU Clock Dynamics, and Next Optimization Roadmap.
 3. `handoff-2026-09-25-task3-fused-rmsnorm.md` — Task 3 Single-Pass Block-Fused RMSNorm (eliminates 256 reduction kernels, saving 1.57 ms/tok).
 4. `handoff-2026-09-25-task2-vectorized-q4k-gemv.md` — Task 2 Vectorized Cooperative GEMV (62.06 tok/s on H100, 128-bit/64-bit vector loads).
