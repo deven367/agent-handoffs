@@ -1,8 +1,7 @@
-# Handoff: Optimization Actions 1, 2, 3, and TODO 1 Landed (2026-09-25)
+# Handoff: Optimization Actions 1, 2, and 3 Landed (2026-09-25)
 
 **Hardware Target**: NVIDIA H100 SXM5 80GB HBM3 (`g37.quartz.uits.iu.edu`, Quartz cluster)  
-**tinygrad Git Commit**: `231786562` (`perf(nv): fuse Q8_0 activation quantization directly into nv_rmsnorm`)  
-**Prior Commit**: `16c494e99` (`perf(nv): fused QK L2 norm, 64-bit vectorized Q6_K GEMV, and intra-warp activation quantize`)  
+**tinygrad Git Commit**: `c14c50207` (HEAD at clean state of `16c494e99`: `perf(nv): fused QK L2 norm, 64-bit vectorized Q6_K GEMV, and intra-warp activation quantize`)  
 **Branch**: `qwen27b-nv-q8-kernel` on `github.com:deven367/tinygrad.git`  
 **Model**: `Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf` (15.65 GiB)  
 
@@ -15,7 +14,7 @@ Prior handoffs:
 
 ## 1. Executive Summary & Accomplishments
 
-All 3 targeted performance actions PLUS **TODO 1 (Fused RMSNorm + Q8 Quantization)** were successfully implemented, microbenchmarked, unit-tested, parity-verified, committed, and pushed:
+All 3 targeted performance actions requested by the user were implemented, microbenchmarked, unit-tested, parity-verified, committed, and pushed:
 
 1. **Action 1: Fused QK L2 Normalization (`nv_normalize`) for `GatedDeltaNetBlock`**:
    - Replaced graph-compiled `Tensor.normalize` at `tinygrad/llm/model.py:355` with custom fused warp reduction kernel `nv_normalize` in `tinygrad/llm/kernels/nv.py`.
@@ -36,13 +35,6 @@ All 3 targeted performance actions PLUS **TODO 1 (Fused RMSNorm + Q8 Quantizatio
    - **Eliminated 80% of DRAM memory loads** (from 160 scalar loads down to 32 coalesced loads per group).
    - Microbenchmark speedup: **1.19× faster** (2.28 ms $\rightarrow$ 1.91 ms across 2,000 dispatches).
 
-4. **TODO 1 LANDED: Fused RMSNorm + Q8 Quantization (`nv_rmsnorm_q8`) (`231786562`)**:
-   - Fused Q8_0 activation quantization directly into the store pass of `nv_rmsnorm`.
-   - Each thread in the warp computes the group scale and quantized int8 values in registers, packing 4 bytes into a uint32 word via `__shfl_sync` without any DRAM round-trips.
-   - Direct outputs `(q, scale)` are pre-populated into `_q8_cache` across the UOp DAG hierarchy (`res`, `res.uop`, `out`, `out.uop`).
-   - Subsequent `q4_k_linear` and `q6_k_linear` layers consume `(q, scale)` directly from cache.
-   - **Kernel Census Result**: `nv_rmsnorm_q8` now replaces `nv_rmsnorm`, and separate `nv_q8_quantize` dispatches dropped from 5 down to 3 in unique programs.
-
 ---
 
 ## 2. Verification Results
@@ -55,22 +47,45 @@ All 3 targeted performance actions PLUS **TODO 1 (Fused RMSNorm + Q8 Quantizatio
 Evaluated across all 248,320 vocabulary tokens:
 ```text
 cs=1 argmax=271
-cs=1 top5=[(271, 33.7863), (25, 21.0458), (11751, 18.5683), (198, 17.0788), (248044, 16.7757)]
-cs=1 n=248320 max=+33.7863 min=-12.1791 sum=-803285.56
+cs=1 top5=[(271, 34.0718), (25, 19.5536), (11751, 18.7959), (248044, 17.0679), (198, 16.6857)]
+cs=1 n=248320 max=+34.0718 min=-12.4540 sum=-800723.00
 ```
 - **Bit-exact argmax: `271`** ✅
-- **All Top-5 tokens match**: `[271, 25, 11751, 198, 248044]` ✅
+- **All Top-5 tokens match**: `[271, 25, 11751, 248044, 198]` ✅
 
 ---
 
-## 3. Next Actionable TODOs for the Incoming Agent (Ranked by ROI)
+## 3. Current Performance & Gap to `llama.cpp`
 
-To close the remaining ~2.0 ms gap to `llama.cpp` (11.60 ms), the following tasks are queued in prioritized order:
+| Milestone / Configuration | Engine | Decode Speed | Decode Latency | Latency Saved vs Baseline | Remaining Gap to `llama.cpp` | Parity Status |
+|---|---|---:|---:|---:|---:|:---:|
+| **Initial Baseline (09-24)** | tinygrad | 38.47 tok/s | 25.99 ms/tok | 0.00 ms | 14.39 ms | 0.9978 cosine sim |
+| **Task 1: Heuristic Widening** (`3a6346f48`) | tinygrad | 53.07 tok/s | 18.84 ms/tok | -7.15 ms | 7.24 ms | Bit-exact match |
+| **Task 2: Vectorized Q4_K GEMV** (`c162d326b`) | tinygrad | 62.06 tok/s | 16.11 ms/tok | -9.88 ms | 4.51 ms | Bit-exact match |
+| **Task 3: Block-Fused RMSNorm** (`bd17e6e1c`) | tinygrad | 68.64 tok/s | 14.57 ms/tok | -11.42 ms | 2.97 ms | Bit-exact match |
+| **Actions 1–3 Current** (`16c494e99` / `c14c50207`) | tinygrad | **~70+ tok/s steady** | **~14.1 ms/tok** | **-11.89 ms** | **~2.5 ms** | **Bit-exact match** |
+| **Reference Target** | **`llama.cpp` (`llama-bench`)** | **86.18 ± 1.04 tok/s** | **11.60 ms/tok** | **-14.39 ms** | **0.00 ms (Goal)** | Reference |
 
-### TODO 1 (Completed): Fused RMSNorm + Q8 Quantization (`nv_rmsnorm_q8`)
-- **Status**: **LANDED & VERIFIED** in commit `231786562`.
+- **Current Gap**: **~2.5 ms/tok** (from 14.1 ms down to 11.60 ms).
+- **Progress**: Closed **82.6% of the initial gap** (11.89 ms eliminated out of 14.39 ms deficit).
 
-### TODO 2 (Next Priority, ~0.5–0.7 ms/tok): Fused Residual Addition + RMSNorm (`nv_add_rmsnorm`)
+---
+
+## 4. Key Architectural Discovery: The Unrolling Trap in RMSNorm Fusion
+
+During the exploration of fusing Q8 activation quantization directly into `nv_rmsnorm` (commit `231786562`, reverted in `c14c50207`):
+- In `_rmsnorm_kernel`, `elems = dim // 32 = 160`.
+- Because custom kernels unroll loops in straight-line UOps, attempting to perform 9 shuffles + 3 stores per group inside the 160-iteration loop generated **1,440 warp shuffles and 480 stores per thread** in a single function!
+- This caused catastrophic CUDA compiler register spilling into local memory DRAM, dropping throughput to 33.76 tok/s.
+- **Key Takeaway**: `nv_q8_quantize` is fast because it uses a **grid of 160 blocks** (1 warp per group, loop count = 1). Keep activation quantization decoupled as a grid-parallel launch, or vectorize its stores (128-bit `uint4`).
+
+---
+
+## 5. Next Actionable TODOs for the Incoming Agent (Ranked by ROI)
+
+To close the remaining ~2.5 ms gap to `llama.cpp` (11.60 ms):
+
+### TODO 1 (High ROI, ~0.5–0.7 ms/tok): Fused Residual Addition + RMSNorm (`nv_add_rmsnorm`)
 - **Location**: `tinygrad/llm/kernels/nv.py` and `tinygrad/llm/model.py:158`.
 - **Root Cause**: In each of the 64 layers, the residual addition `h = x + attn_output` runs as a standalone elementwise kernel (`E_*`), writing the sum to DRAM before RMSNorm reads it back.
 - **Action**:
@@ -78,15 +93,15 @@ To close the remaining ~2.0 ms gap to `llama.cpp` (11.60 ms), the following task
   - In the reduction loop, each thread loads `val = x[idx] + residual[idx]` in registers, accumulates `acc += val^2`, and optionally writes the updated residual sum back if needed.
 - **Expected Speedup**: Eliminates 64 kernel launches and 64 DRAM round-trips, saving **~0.5–0.7 ms/tok**.
 
-### TODO 3 (Medium ROI, ~0.2–0.4 ms/tok): Vectorized 128-Bit Stores for `nv_q8_quantize`
+### TODO 2 (Medium ROI, ~0.2–0.4 ms/tok): Vectorized 128-Bit Stores for `nv_q8_quantize`
 - **Location**: `tinygrad/llm/kernels/nv.py:75`.
 - **Action**:
-  - In `_q8_quantize_kernel` and `_rmsnorm_kernel`, pack the 8 uint32 words into 2 `uint4` (128-bit) stores using lanes 0 and 1, skipping writes for lanes 2..31.
+  - In `_q8_quantize_kernel`, pack the 8 uint32 words into 2 `uint4` (128-bit) stores using lanes 0 and 1, skipping writes for lanes 2..31.
   - This avoids uncoalesced/redundant writes across the remaining 24 threads in the warp.
 
 ---
 
-## 4. Cheat Sheet & Traps to Avoid for Incoming Agent
+## 6. Cheat Sheet for Incoming Agent
 
 ```bash
 # Connect to compute node (H100 SXM5 80GB):
@@ -102,7 +117,7 @@ make test-units
 make parity
 # Output:
 # cs=1 argmax=271
-# cs=1 top5=[(271, 33.7863), (25, 21.0458), (11751, 18.5683), (198, 17.0788), (248044, 16.7757)]
+# cs=1 top5=[(271, 34.0718), (25, 19.5536), (11751, 18.7959), (248044, 17.0679), (198, 16.6857)]
 
 # 3. Benchmark steady-state decode throughput:
 make bench-tg
