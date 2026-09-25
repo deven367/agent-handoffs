@@ -9,15 +9,26 @@ import tinygrad.llm.model as m
 from tinygrad import Tensor
 from tinygrad.helpers import GlobalCounters
 
-MODEL = "/data/user/demistry/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf"
+import os
+MODEL = os.environ.get("MODEL")
+if not MODEL:
+  for candidate in [
+    "/data/user/demistry/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf",
+    "/N/scratch/demistry/models/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf",
+  ]:
+    if os.path.exists(candidate):
+      MODEL = candidate
+      break
+assert MODEL and os.path.exists(MODEL), f"Model not found: {MODEL}"
 
 ctx = int(sys.argv[1]) if len(sys.argv) > 1 else 512
 steps = int(sys.argv[2]) if len(sys.argv) > 2 else 20
 
 model, _ = m.Transformer.from_gguf(MODEL, max_context=ctx, cache_type="f16")
 gen = model.generate([1000], temperature=0.0)
-# burn first 2 tokens (JIT compile prefill + rollout)
-next(gen); next(gen)
+# burn first 5 tokens (JIT compile prefill + rollout + graph capture)
+for _ in range(5):
+    next(gen)
 # timed decode
 GlobalCounters.reset()
 t0 = time.perf_counter()
