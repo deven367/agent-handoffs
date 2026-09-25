@@ -1,10 +1,10 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g37` on Quartz). Actions 1, 2, 3 and TODO 1 landed (`231786562`): Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize, and Fused RMSNorm+Q8 Quantize. Parity verified bit-exact across all 248,320 vocabulary tokens. Unit tests 100% passing (`make test-units`).
+> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g37` on Quartz). Actions 1, 2, 3 landed (`c14c50207` / clean state of `16c494e99`): Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize. Parity verified bit-exact across all 248,320 vocabulary tokens. Unit tests 100% passing (`make test-units`).
 
 ## Read first
 
-1. `handoff-2026-09-25-actions-1-2-3-completed.md` — **LATEST: Actions 1, 2, 3 and TODO 1 Landed (Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize, and Fused RMSNorm+Q8) (`231786562`).**
+1. `handoff-2026-09-25-actions-1-2-3-completed.md` — **LATEST: Actions 1, 2, and 3 Landed (Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize), Current Gap Analysis, and Unrolling Trap Takeaways (`c14c50207`).**
 2. `handoff-2026-09-25-gated-deltanet-normalize-and-next-steps.md` — GatedDeltaNet Normalization Profiling, GPU Clock Dynamics, and Next Optimization Roadmap.
 3. `handoff-2026-09-25-task3-fused-rmsnorm.md` — Task 3 Single-Pass Block-Fused RMSNorm (eliminates 256 reduction kernels, saving 1.57 ms/tok).
 4. `handoff-2026-09-25-task2-vectorized-q4k-gemv.md` — Task 2 Vectorized Cooperative GEMV (62.06 tok/s on H100, 128-bit/64-bit vector loads).
@@ -67,9 +67,9 @@ Total decode time: ~14.1 ms/tok (~70+ tok/s steady)
 
 ## Ranked Next Steps to Close the Final ~2.5 ms Gap to llama.cpp (11.60 ms)
 
-1. **Fused RMSNorm + Q8 Quantization (`nv_rmsnorm_q8`)**:
-   - Fuse `nv_rmsnorm` and `nv_q8_quantize` into a single kernel to eliminate 192 kernel launches and 384 redundant DRAM round-trips. Expected savings: **~1.0–1.2 ms/tok**.
-2. **Fused Residual Add + RMSNorm (`nv_add_rmsnorm`)**:
-   - Fuse residual addition directly into the input of `nv_rmsnorm`, eliminating 64 elementwise kernels and DRAM round-trips. Expected savings: **~0.5–0.7 ms/tok**.
-3. **Vectorized 128-Bit Stores for Q8 Quantize**:
-   - Store 8 uint32 words as two 128-bit `uint4` stores per group. Expected savings: **~0.2–0.4 ms/tok**.
+1. **TODO 1: Fused Residual Add + RMSNorm (`nv_add_rmsnorm`)** (~0.5–0.7 ms/tok):
+   - Fuse residual addition directly into the input of `nv_rmsnorm`, eliminating 64 elementwise kernels and DRAM round-trips.
+2. **TODO 2: Vectorized 128-Bit Stores for Q8 Quantize** (~0.2–0.4 ms/tok):
+   - In `_q8_quantize_kernel`, store 8 uint32 words as two 128-bit `uint4` stores using lanes 0 and 1.
+3. **TODO 3: Multi-Warp Grid-Fused RMSNorm + Q8 Quantize** (~0.5–0.8 ms/tok):
+   - Use a multi-warp grid launch (160 warps) instead of a single-warp loop to avoid Python UOp unrolling register spilling.
