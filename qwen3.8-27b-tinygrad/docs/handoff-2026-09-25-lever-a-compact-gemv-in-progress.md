@@ -5,9 +5,13 @@
 
 **tinygrad (g37)**: `38342a3be`, branch `qwen27b-nv-q8-kernel`, clean tree, pushed.
 **agent-handoffs**: `d93c556` (pushed; g37 copy synced via `git pull`).
-**llama-server**: RUNNING on g37 (port 9932, Q8_K_XL + MTP, ~44.4 GiB, pid in
-`/tmp/llama-server.pid`) — the user's server; **always restart it after benchmarking**
-(`make serve`, then `curl -s localhost:9932/health`).
+**llama-server**: **DOWN — needs restart.** The user's server (port 9932, Q8_K_XL + MTP,
+~44.4 GiB) is NOT running: nothing on 9932, GPU at 0 MiB. A `make serve` restart was
+healthy for ~6 s (3×2 s probes) then exited cleanly ("cleaning up before exit" in
+`/tmp/llama-server.log`, cause unknown — suspected race between the recipe's health-probe
+shell `exit 0` and the backgrounded server; investigate if it recurs). **First action:
+`make serve`, confirm `curl -s localhost:9932/health` stays ok for >30 s, and that
+`nvidia-smi` shows ~44 GiB before doing anything else.**
 
 Current perf (clean, server stopped): tinygrad **73.69 tok/s (13.57 ms)**, llama.cpp
 **85.87 ± 1.00 tok/s (11.65 ms)**, gap **1.92 ms/tok**, parity 85.8%.
