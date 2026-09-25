@@ -1,59 +1,67 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-24. Cooperative Warp Q4_K and Q6_K landed & committed (`0fb19cf04`). Logit parity verified (0.9980 cosine sim). L40S decode steady at 31.10 tok/s (vs llama.cpp 37.95 tok/s). Full 2,060-kernel decode census documented.
+> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g37` on Quartz). Decode reached 50.61 tok/s (19.76 ms/tok), a +31.5% speedup over baseline (saving 6.23 ms/tok). 100% bit-exact top-5 logit match. Unified Makefile created with automated cluster/path detection for Quartz and Lair.
 
 ## Read first
 
-1. `handoff-2026-09-24-l40s-cooperative-warp-and-kernel-census.md` — **latest: Cooperative Q4_K and Q6_K landed and verified on L40S (`lair-g6`), complete decode kernel census (2,060 kernels/step), L40S vs llama.cpp benchmark, next steps for RMSNorm fusion.**
-2. `handoff-2026-09-24-decode-gemv-bandwidth-analysis-and-cooperative-warp.md` — GEMV memory load redundancy root cause analysis, cooperative warp blueprints for Q4_K and Q6_K, multi-warp evaluation findings.
-3. `handoff-2026-09-24-activation-memoization-and-h100-baseline.md` — activation memoization landed (-240 kernels), H100 decode baseline, llama.cpp parity table, Q8_K_XL 262K verified.
+1. `handoff-2026-09-25-h100-baseline-and-quartz-setup.md` — **LATEST: Fast-start cheat sheet (one-command make targets), H100 SXM5 benchmark results, 2,060-kernel decode latency breakdown, RMSNorm fusion roadmap, and lessons learned.**
+2. `handoff-2026-09-24-l40s-cooperative-warp-and-kernel-census.md` — L40S benchmarks (31.10 tok/s), cooperative warp Q6_K implementation details.
+3. `handoff-2026-09-24-decode-gemv-bandwidth-analysis-and-cooperative-warp.md` — GEMV memory load redundancy root cause analysis and cooperative warp architecture.
+4. `handoff-2026-09-17-rmsnorm-experiment.md` — **CRITICAL NEGATIVE RESULT: why black-box custom RMSNorm kernels failed (broke compiler fusion, increased kernel count).**
 
-## Ground truth
+## Fast-Start Commands (Root Makefile)
 
-- Target Compute Node: `lair-g6` (`node-lair`), NVIDIA L40S 48GB GDDR6 (active SLURM job for `demistry`).
-  - *Note*: `lair-g1` (H100 NVL) currently rejects SSH via `pam_slurm_adopt` (no active job allocation).
-- tinygrad: `/u/demistry/tinygrad-src`, branch `qwen27b-nv-q8-kernel`.
-- Source HEAD: `0fb19cf04 perf(nv): cooperative warp GEMV for Q4_K and Q6_K` (pushed to fork).
-- Launcher: `/u/demistry/agent-handoffs/Makefile`; `~/Makefile` symlinks to it.
+```bash
+# On Quartz (ssh g37) or Lair (ssh lair-g6):
+cd ~/projects/agent-handoffs   # (or /u/demistry/agent-handoffs on Lair)
 
-## What works
-
-- **Cooperative Warp GEMV for Q4_K and Q6_K**:
-  - `nv_q4k.py`: 32 threads cooperatively load 128B `qs`, 0 duplicate weight loads, 100% 128-byte coalescing.
-  - `nv_q6k.py`: 32 threads cooperatively load 128B `ql` and 64B `qh` via `_u16_word`, eliminating 2.67× redundancy.
-  - Unit sweeps passed: `sweep_q4k.py` ALL OK, `sweep_q6k.py` ALL OK up to 248320x5120 (lm_head).
-  - Model logit parity on L40S: `argmax=271` (Match=True), top-5 identical, cosine similarity **0.99804525** (vs baseline 0.9978).
-- **L40S Throughput**:
-  - `tinygrad`: **31.10 tok/s (32.15 ms/tok)** steady-state decode.
-  - `llama.cpp`: **37.95 tok/s (26.35 ms/tok)**.
-  - Tinygrad is at **82.0% of llama.cpp** on L40S.
-- **Full Decode Census (2,060 kernels/step)**:
-  - Quantized GEMV: `nv_linear_q4_k` (432 calls, ~19.0 ms) + `nv_linear_q6_k` (65 calls, ~3.3 ms) = 22.3 ms (75.5% peak memory bandwidth).
-  - Non-GEMV: 1,563 calls taking ~9.85 ms (RMSNorm: 322 calls taking ~3.2 ms; activation quantization: 257 calls taking ~2.6 ms; elementwise/residuals: ~880 calls taking ~3.1 ms; scan/attn: 64 calls taking ~0.95 ms).
-- Server: OpenAI-compatible API at `/v1/chat/completions` (pinned at `chunk_size=1`).
-
-## Limitations
-
-- **Non-GEMV Overhead on L40S (9.85 ms / 30.6%)**: Split RMSNorm (`r_16_320` + `E_40_32_4`) and activation quantization add ~5.8 ms of non-GEMV latency.
-- Prefill pinned at `cs=1` due to chunked prefill divergence on CUDA.
-- `lair-g1` access depends on SLURM queue / job allocation.
-
-## Next steps (ranked)
-
-1. **RMSNorm reduction + scaling fusion:**
-   - Fuse `r_16_320` (129 calls) + `E_40_32_4` (193 calls) into a single-pass warp-reduction RMSNorm kernel to avoid DRAM round-trips.
-   - Expected savings: **~1.8–2.2 ms/tok** on L40S (brings decode from 32.15 ms $\rightarrow$ ~30.0 ms, ~33.3 tok/s).
-2. **Vectorize GEMV loads (128-bit `uint4` / `v4.u32`):**
-   - Increase memory bus saturation on L40S from 75% to 85%+.
-   - Expected savings: **~2.0–2.5 ms/tok** on L40S.
-3. **Re-evaluate on H100 NVL (`lair-g1`):**
-   - Run `bench_decode.py 512 20` when SLURM job is allocated on `lair-g1` to measure cooperative warp speedup on 3.9 TB/s HBM.
-
-## Important paths
-
-```text
-Model:    /data/user/demistry/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf
-tinygrad: /u/demistry/tinygrad-src
-launcher: /u/demistry/agent-handoffs/Makefile
-scripts:  /u/demistry/agent-handoffs/qwen3.8-27b-tinygrad/scripts
+make info        # Print auto-detected cluster, GPU, paths, and environment settings
+make test-units  # Run both Q4_K and Q6_K cooperative warp unit sweeps (ALL OK)
+make parity      # Verify 27B model logits (bit-exact top-5 match: [271, 25, 11751, 248044, 198])
+make bench-tg    # Measure steady-state tinygrad decode throughput (512 ctx, 20 steps)
+make bench-llama # Measure reference llama.cpp decode throughput
 ```
+
+## Ground truth & Host Mappings
+
+- **Active Compute Node**: `g37.quartz.uits.iu.edu` (`ssh g37`), NVIDIA H100 SXM5 80GB HBM3 (3,350 GB/s bandwidth).
+- **Secondary Node**: `lair-g6` (`ssh lair-g6`), NVIDIA L40S 48GB GDDR6 (864 GB/s bandwidth).
+- **tinygrad Workdir**:
+  - Quartz: `$(HOME)/projects/tinygrad-src` (branch `qwen27b-nv-q8-kernel`, HEAD `0fb19cf04`).
+  - Lair: `/u/demistry/tinygrad-src` (same branch and commit).
+- **Model Paths**:
+  - Quartz: `/N/scratch/demistry/models/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf`
+  - Lair: `/data/user/demistry/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf`
+- **Launcher**: `/N/u/demistry/Quartz/projects/agent-handoffs/Makefile` (host-aware, auto-selects cluster settings).
+
+## Benchmark Comparison Table (Q4_K_M, ctx=512, f16 KV)
+
+| GPU / Platform | Engine | Decode tok/s | Decode ms/tok | Parity Ratio | Logit Parity |
+|---|---|---:|---:|:---:|:---:|
+| **H100 SXM5 80GB** (`g37`) | **llama.cpp** (`llama-bench`) | **86.18 ± 1.04** | **11.60 ms** | 100% | Reference |
+| H100 SXM5 80GB (`g37`) | **tinygrad** (Cooperative Warp) | **50.61** | **19.76 ms** | **58.7%** | **Bit-exact match** |
+| H100 NVL 94GB (`lair-g1`) | tinygrad (09-24 Baseline) | 38.47 | 25.99 ms | 44.6% | 0.9978 sim |
+| **L40S 48GB** (`lair-g6`) | **llama.cpp** (`llama-bench`) | **37.95 ± 0.28** | **26.35 ms** | 100% | Reference |
+| L40S 48GB (`lair-g6`) | **tinygrad** (Cooperative Warp) | **31.10** | **32.15 ms** | **82.0%** | 0.9980 sim |
+
+## The Current Bottleneck: Where the 19.76 ms Goes on H100
+
+Decode executes **2,060 kernels per step**:
+1. **Quantized GEMV (497 kernels)**: **~10.4 ms** (streaming 16.8 GB weights at ~1.62 TB/s).
+2. **Non-GEMV Overhead (1,563 kernels)**: **~9.4 ms**
+   - Split 2-pass RMSNorm (`r_16_320` + `E_40_32_4`, 322 calls): **~5.8 ms**
+   - Activation quantization (`nv_q8_quantize`, 257 calls): **~2.2 ms**
+   - Residual additions & SwiGLU: **~1.4 ms**
+
+llama.cpp launches only ~120 fused kernels per step with zero split reductions.
+
+## Ranked Next Steps
+
+1. **Compiler-Friendly Single-Pass RMSNorm Fusion (~3.0 ms/tok savings on H100)**:
+   - Eliminate the 322 split kernels (`r_16_320` and `E_40_32_4`) writing intermediate variance to global DRAM.
+   - Implement single-pass reduction + scaling in codegen or lowering that preserves surrounding elementwise fusion (do NOT insert a black-box custom UOp).
+   - Expected result: Decode jumps from **50.6 tok/s $\rightarrow$ ~60 tok/s**.
+2. **Vectorize Cooperative Q4_K Loads (128-bit `uint4` / `v4.u32`) (~2.0 ms/tok savings)**:
+   - Group loads into 128-bit vector transactions to boost memory bus saturation from 1.62 TB/s to 2.2+ TB/s.
+3. **Activation Quantization Optimization**:
+   - Streamline `nv_q8_quantize` or fuse quantization into preceding operations.
