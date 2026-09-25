@@ -7,9 +7,9 @@ import os, sys, argparse
 import numpy as np
 
 # Portable search for tinygrad-src
-for p in ["/u/demistry/tinygrad-src", "/N/slate/demistry/tinygrad-src"]:
+for p in [os.path.expanduser("~/projects/tinygrad-src"), "/u/demistry/tinygrad-src", "/N/slate/demistry/tinygrad-src"]:
     if os.path.isdir(p) and p not in sys.path:
-        sys.path.insert(0, p)
+        sys.path.append(p)
 
 DEFAULT_MODEL = os.environ.get(
     "MODEL",
