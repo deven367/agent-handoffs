@@ -1,17 +1,19 @@
-# Handoff: Lever A — Compact GEMV Output Buffers (IN PROGRESS, 2026-09-25)
+# Handoff: Lever A — Compact GEMV Output Buffers (REJECTED 2026-09-25)
 
-> **State: design finalized, edits NOT yet applied.** This session landed TODO 1+2
-> (`38342a3be`) and then started Lever A. Everything below is the complete work order.
+> **REJECTED — do not implement this.** It was implemented verbatim on 2026-09-25, broke
+> parity (Q6_K sweep 7/7 FAIL, logits garbage), and was reverted. Two independent reasons,
+> both with evidence in `handoff-2026-09-25-lever-a-rejected-and-reprofile.md`:
+> (a) the copy kernels this lever eliminates **do not exist** (decode graph has zero `copy`
+> kernels — the `[..., 0]` slice is fused into the consumer), and (b) a lane-invariant store
+> triggers a codegen gater that double-counts the reduce. The design below is kept as history
+> only; the §"Expectation-setting" and §"Verification sequence" sections are obsolete.
 
 **tinygrad (g37)**: `38342a3be`, branch `qwen27b-nv-q8-kernel`, clean tree, pushed.
 **agent-handoffs**: `d93c556` (pushed; g37 copy synced via `git pull`).
-**llama-server**: **DOWN — needs restart.** The user's server (port 9932, Q8_K_XL + MTP,
-~44.4 GiB) is NOT running: nothing on 9932, GPU at 0 MiB. A `make serve` restart was
-healthy for ~6 s (3×2 s probes) then exited cleanly ("cleaning up before exit" in
-`/tmp/llama-server.log`, cause unknown — suspected race between the recipe's health-probe
-shell `exit 0` and the backgrounded server; investigate if it recurs). **First action:
-`make serve`, confirm `curl -s localhost:9932/health` stays ok for >30 s, and that
-`nvidia-smi` shows ~44 GiB before doing anything else.**
+**llama-server**: **DOWN** (nothing on :9932, GPU at 0 MiB). `/tmp/llama-server.log` shows a
+clean start (listening on :9932 at `0:12` elapsed) and `cleaning up before exit` at `6:10`
+elapsed — it ran ~6 min, and what ended it is not established. Benchmarks are clean in this
+state.
 
 Current perf (clean, server stopped): tinygrad **73.69 tok/s (13.57 ms)**, llama.cpp
 **85.87 ± 1.00 tok/s (11.65 ms)**, gap **1.92 ms/tok**, parity 85.8%.

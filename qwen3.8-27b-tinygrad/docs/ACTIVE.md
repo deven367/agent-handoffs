@@ -1,10 +1,10 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g37` on Quartz). Actions 1–3 landed (`c14c50207`) and **TODO 1–2 landed (`38342a3be`)**: Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize, **Fused Residual Add + RMSNorm (`nv_add_rmsnorm`, −64 E_* launches), Compact Q8 Activation Layout (36 B/group instead of 256 B)**. Parity verified bit-exact across all 248,320 vocabulary tokens. Unit tests 100% passing (`make test-units`).
+> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g37` on Quartz). Actions 1–3 landed (`c14c50207`) and **TODO 1–2 landed (`38342a3be`)**: Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize, **Fused Residual Add + RMSNorm (`nv_add_rmsnorm`, −64 E_* launches), Compact Q8 Activation Layout (36 B/group instead of 256 B)**. Parity verified bit-exact across all 248,320 vocabulary tokens. Unit tests 100% passing (`make test-units`). **Lever A (compact GEMV output buffers) was implemented, broke parity, and was REJECTED/reverted — the tinygrad tree is clean at `38342a3be`.**
 
 ## Read first
 
-1. `handoff-2026-09-25-lever-a-compact-gemv-in-progress.md` — **IN PROGRESS: Lever A (compact GEMV output buffers) — design finalized, exact edit list + verification sequence; edits not yet applied.**
+1. `handoff-2026-09-25-lever-a-rejected-and-reprofile.md` — **START HERE: Lever A rejected (PTX root cause; the 572 copy kernels it targeted do not exist), fresh kernel census, re-ranked next steps.**
 2. `handoff-2026-09-25-fused-add-rmsnorm-and-compact-q8.md` — TODO 1+2 Landed (`38342a3be`): fused add+RMSNorm, compact Q8 layout, 73.69 tok/s, clean A/B re-measure, benchmark-hygiene finding, GEMV output-buffer lever.
 3. `handoff-2026-09-25-actions-1-2-3-completed.md` — Actions 1, 2, and 3 Landed (Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize), Current Gap Analysis, and Unrolling Trap Takeaways (`c14c50207`).
 4. `handoff-2026-09-25-gated-deltanet-normalize-and-next-steps.md` — GatedDeltaNet Normalization Profiling, GPU Clock Dynamics, and Next Optimization Roadmap.
@@ -45,7 +45,7 @@ make bench-llama-05b # Fast-iteration reference llama.cpp on 0.5B model (919 tok
 | GPU / Platform | Engine | Decode tok/s | Decode ms/tok | Parity Ratio | Logit Parity |
 |---|---|---:|---:|:---:|:---:|
 | **H100 SXM5 80GB** (`g37`) | **llama.cpp** (`llama-bench`, clean) | **85.87 ± 1.00** | **11.65 ms** | 100% | Reference |
-| **H100 SXM5 80GB** (`g37`) | **tinygrad (TODO 1+2: fused add_rmsnorm, compact q8, `38342a3be`)** | **73.69** | **13.57 ms** | **85.8%** | **Bit-exact match** |
+| **H100 SXM5 80GB** (`g37`) | **tinygrad (TODO 1+2: fused add_rmsnorm, compact q8, `38342a3be`)** | **73.83** | **13.54 ms** | **86.0%** | **Bit-exact match** |
 | H100 SXM5 80GB (`g37`) | tinygrad (Actions 1–3, `c14c50207`) | 68.79 | 14.54 ms | 79.8% | Match (diff $\le 0.0019$) |
 | H100 SXM5 80GB (`g38`) | tinygrad (Task 2: Vectorized Coop) | 62.06 | 16.11 ms | 72.0% | Bit-exact match |
 | H100 SXM5 80GB (`g37`) | tinygrad (Task 1: Heuristic r_256) | 53.07 | 18.84 ms | 61.6% | Bit-exact match |
@@ -55,29 +55,42 @@ make bench-llama-05b # Fast-iteration reference llama.cpp on 0.5B model (919 tok
 
 ## Latency Breakdown & Current Status on H100 (`38342a3be`)
 
+Decode graph = **1,588 kernels/step**; ~13.5 ms/tok wall. Ranked by GPU time
+(`JIT=0 DEBUG=2` census, sum of `tm` over the final 1,588 launches — ranking only, DEBUG=2
+syncs per kernel so absolutes run ~1.3-1.5x high; full table in the 09-25 rejection handoff):
+
 ```text
-Total decode time: ~13.6 ms/tok (73.7 tok/s steady)   [GEMV split from `c14c50207` profile;
-                                                       non-GEMV estimates — re-run kstat.py]
-├── 1. Quantized GEMV (572 kernels): ~7.2 ms
-│   ├── Q4_K v4 (444 calls, 128-bit vectorized): ~5.2 ms
-│   ├── Q4_K v2 (64 calls, 64-bit vectorized): ~0.9 ms
-│   └── Q6_K v2 (64 calls, 64-bit vectorized, 1.23x speedup): ~1.1 ms
-└── 2. Non-GEMV Overhead (~1,424 kernels, ~6.4 ms)
-    ├── Single-Pass RMSNorm (nv_rmsnorm, 129 calls): ~1.4 ms  (64 calls fused into add_rmsnorm)
-    ├── Fused Add+RMSNorm (nv_add_rmsnorm, 64 calls, NEW): ~0.7 ms
-    ├── Fused QK L2 Norm (nv_normalize, 128 calls): ~0.7 ms
-    ├── Activation Quantization (nv_q8_quantize, 192 calls, 36 B/group writes): ~1.2 ms
-    └── SwiGLU, RoPE & Residual Additions (~276 calls, 64 E_* adds gone): ~2.2 ms
+├── 1. Quantized GEMV (~7.9 ms)   16.8 GB/token streamed; 5.0 ms is the HBM floor
+│   ├── nv_linear_q4_k_v4 (318 calls/window)
+│   └── nv_linear_q6_k_v2 (43 calls/window)
+├── 2. r_2_32_4_970 (~1.5 ms, 2 calls, ~760 us each)  UNIDENTIFIED — vocab-sized
+│                                                          tensor (248320 = 2*32*4*970),
+│                                                          last kernels of the step →
+│                                                          logits argmax/sample stage
+├── 3. Activation quantization (nv_q8_quantize, 188 calls): ~1.5 ms
+├── 4. Norms (nv_rmsnorm 106, nv_add_rmsnorm 47, nv_normalize 69 calls): ~2.2 ms
+├── 5. Elementwise (E_40_32_4, E_64_32_3, E_136_32_4, E_16_32_4, E_3_4_4, E_16_32_4_3): ~3.9 ms
+└── 6. Attention/recurrence (gated_delta_prefill, flash_decode_partial): ~0.7 ms
 ```
+
+**There are zero `copy` kernels in the decode step** — the GEMV consumers read `[..., 0]`
+as fused strided index arithmetic. Any lever premised on eliminating copies is dead on arrival.
 
 ## Ranked Next Steps to Close the Remaining ~1.9 ms Gap to llama.cpp (11.65 ms)
 
-1. **Lever A: Compact GEMV output buffers — IN PROGRESS, see `handoff-2026-09-25-lever-a-compact-gemv-in-progress.md`** (design finalized; exact edit list there):
-   - Every GEMV stores `(rows, 32)` f32 per output row (128 B written, only word 0 read). Fix: duplicate word-0 store from all 32 lanes + `(rows, 1)` buffer. Bandwidth part ≈ 0.15 ms (the "~1 ms" was an overestimate); the real win is the up-to-572 eliminated contiguous-copy kernels — measure with a kernel census.
-2. **TODO 3: Multi-Warp Grid-Fused RMSNorm + Q8 Quantize** (~0.5–0.8 ms/tok):
-   - Use a multi-warp grid launch (160 warps) instead of a single-warp loop to avoid Python UOp unrolling register spilling.
-3. **Fused 2nd residual add (`h + ffn_out`) into the next block's `attn_norm`**:
-   - Cross-block restructure of `Transformer.forward` (yield `(residual, normed)` pairs); removes ~64 more E_* launches.
-4. **Re-profile first** (kstat.py on a DEBUG=2 log) to re-rank after `38342a3be`.
+1. **Identify + fix `r_2_32_4_970` (~1.5 ms/step, 11% of the step).** Two calls at ~760 us each
+   on a 248,320-element (vocab) tensor = ~1.3 GB/s, ~50x slower than it should be; llama.cpp
+   does the same argmax in microseconds. Reproduce with a 2-step `DEBUG=5` decode, take the
+   source block matching the kernel's ordinal, then fuse a single-pass argmax or fix the reduce's
+   launch geometry. Cutting it to ~50 us/call closes ~70% of the gap on its own.
+2. **Fuse the remaining elementwise families** (~3.9 ms/window): SwiGLU + RoPE + the 2nd residual
+   add are still separate kernels; ride the 2nd residual add into the next block's `attn_norm`
+   (cross-block `Transformer.forward` restructure).
+3. **GEMV streaming efficiency**: ~7.9 ms against a 5.0 ms HBM floor — the rest of the gap, but
+   deep work; only after 1 and 2.
+4. Multi-warp grid-fused RMSNorm + Q8 quantize (old TODO 3) stays queued behind 1-3.
+5. **Kernel rule learned 2026-09-25:** a custom-kernel store may only be written through an
+   address that depends on the lane axis. A lane-invariant store makes the CUDA renderer gate
+   the store and re-emit the last reduce butterfly, so the stored value is doubled.
 
 **Benchmark hygiene:** a resident `llama-server` (44% SM bursts) cut llama-bench 85.87 → 48.51 tok/s. Always `make stop` before benchmarking, `make serve` after.
