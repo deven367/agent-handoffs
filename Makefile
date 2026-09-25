@@ -186,4 +186,16 @@ bench-llama:
 	@test -f $(MODEL_Q4) || { echo "Model not found at $(MODEL_Q4)"; exit 1; }
 	$(LLAMA_BENCH) -m $(MODEL_Q4) -n 20 -p 512 -fa 1
 
-.PHONY: info serve status logs stop bench serve-tg status-tg logs-tg stop-tg test-q4k test-q6k test-units parity bench-tg bench-llama
+MODEL_05B ?= $(MODEL_DIR)/qwen2.5-0.5b-instruct-q4_k_m.gguf
+
+bench-tg-05b:
+	@test -d $(TG_CWD) || { echo "tinygrad-src not found at $(TG_CWD)"; exit 1; }
+	@test -f $(MODEL_05B) || { echo "0.5B Model not found at $(MODEL_05B)"; exit 1; }
+	$(TG_ENV) MODEL=$(MODEL_05B) python3 $(SCRIPTS_DIR)/bench_decode.py 512 20
+
+bench-llama-05b:
+	@test -f $(LLAMA_BENCH) || { echo "llama-bench not found at $(LLAMA_BENCH)"; exit 1; }
+	@test -f $(MODEL_05B) || { echo "0.5B Model not found at $(MODEL_05B)"; exit 1; }
+	$(LLAMA_BENCH) -m $(MODEL_05B) -n 20 -p 512 -fa 1
+
+.PHONY: info serve status logs stop bench serve-tg status-tg logs-tg stop-tg test-q4k test-q6k test-units parity bench-tg bench-llama bench-tg-05b bench-llama-05b
