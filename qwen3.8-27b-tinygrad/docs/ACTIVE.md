@@ -4,11 +4,11 @@
 
 ## Read first
 
-1. `handoff-2026-09-25-gated-deltanet-normalize-and-next-steps.md` — **LATEST: GatedDeltaNet Normalization Profiling, GPU Clock Dynamics, and Next Optimization Roadmap.**
-2. `handoff-2026-09-25-task3-fused-rmsnorm.md` — Task 3 Single-Pass Block-Fused RMSNorm (eliminates 256 reduction kernels, saving 1.57 ms/tok).
-3. `handoff-2026-09-25-task2-vectorized-q4k-gemv.md` — Task 2 Vectorized Cooperative GEMV (62.06 tok/s on H100, 128-bit/64-bit vector loads).
-4. `handoff-2026-09-25-h100-baseline-and-quartz-setup.md` — Fast-start cheat sheet (one-command make targets), H100 SXM5 benchmark results, 2,060-kernel decode latency breakdown, 0.5B debugging setup.
-5. `handoff-2026-09-17-rmsnorm-experiment.md` — Why earlier black-box custom RMSNorm attempts failed (lack of activation caching and un-memoized custom kernel boundaries).
+1. `handoff-2026-09-25-actions-1-2-3-completed.md` — **LATEST: Actions 1, 2, and 3 Landed (Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize) (`16c494e99`).**
+2. `handoff-2026-09-25-gated-deltanet-normalize-and-next-steps.md` — GatedDeltaNet Normalization Profiling, GPU Clock Dynamics, and Next Optimization Roadmap.
+3. `handoff-2026-09-25-task3-fused-rmsnorm.md` — Task 3 Single-Pass Block-Fused RMSNorm (eliminates 256 reduction kernels, saving 1.57 ms/tok).
+4. `handoff-2026-09-25-task2-vectorized-q4k-gemv.md` — Task 2 Vectorized Cooperative GEMV (62.06 tok/s on H100, 128-bit/64-bit vector loads).
+5. `handoff-2026-09-25-h100-baseline-and-quartz-setup.md` — Fast-start cheat sheet (one-command make targets), H100 SXM5 benchmark results, 2,060-kernel decode latency breakdown, 0.5B debugging setup.
 
 ## Fast-Start Commands (Root Makefile)
 
