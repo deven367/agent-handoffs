@@ -12,6 +12,10 @@
 #   make status-tg     print tinygrad health + GPU memory
 #   make logs-tg       tail tinygrad log
 #   make stop-tg       stop tinygrad server
+#   make serve-mimo    start llama-server with mimo-qwen (background, log to $(MIMO_LOGFILE))
+#   make status-mimo   print health + GPU memory for mimo-qwen server
+#   make logs-mimo     tail mimo-qwen server log
+#   make stop-mimo     stop mimo-qwen server (SIGINT)
 #
 # Benchmarking & verification:
 #   make test-q4k      run cooperative Q4_K unit test sweep
@@ -20,6 +24,7 @@
 #   make parity        verify full 27B model logit parity (argmax + top-5)
 #   make bench-tg      benchmark tinygrad steady-state decode throughput (ctx=512 steps=20)
 #   make bench-llama   benchmark llama.cpp decode throughput (ctx=512 steps=20)
+#   make bench-llama-mimo benchmark mimo-qwen on llama.cpp (ctx=512 steps=20)
 #   make bench         run llama-bench smoke test
 
 # Cluster auto-detection:
@@ -54,6 +59,8 @@ TG_ENV         ?= PYTHONPATH=$(TG_CWD) DEV=CUDA
 SCRIPTS_DIR    ?= $(shell pwd)/qwen3.8-27b-tinygrad/scripts
 endif
 
+MODEL_MIMO     ?= $(MODEL_DIR)/mimo-qwen-q8_0.gguf
+
 PORT    ?= 9932
 ALIAS   ?= Qwen3.8-27B
 DEVICE  ?= CUDA0
@@ -86,6 +93,7 @@ info:
 	@echo "GPU:            $(GPU_NAME)"
 	@echo "Q4 Model:       $(MODEL_Q4)"
 	@echo "Q8 Model:       $(MODEL)"
+	@echo "Mimo Model:     $(MODEL_MIMO)"
 	@echo "llama.cpp dir:  $(LLAMA_DIR)"
 	@echo "tinygrad src:   $(TG_CWD)"
 	@echo "tinygrad env:   $(TG_ENV)"
@@ -207,4 +215,48 @@ bench-llama-05b:
 	@test -f $(MODEL_05B) || { echo "0.5B Model not found at $(MODEL_05B)"; exit 1; }
 	$(LLAMA_BENCH) -m $(MODEL_05B) -n 20 -p 512 -fa 1
 
-.PHONY: info serve status logs stop bench serve-tg status-tg logs-tg stop-tg test-q4k test-q6k test-argmax test-units token-ab parity bench-tg bench-llama bench-tg-05b bench-llama-05b
+MIMO_PORT      ?= 9935
+MIMO_ALIAS     ?= mimo-qwen
+MIMO_CTX       ?= 32768
+MIMO_NP        ?= 1
+MIMO_LOGFILE   ?= /tmp/llama-server-mimo.log
+MIMO_PIDFILE   ?= /tmp/llama-server-mimo.pid
+
+serve-mimo:
+	@test -f $(SERVER) || { echo "llama-server not found at $(SERVER)"; exit 1; }
+	@test -f $(MODEL_MIMO) || { echo "Mimo model not found at $(MODEL_MIMO)"; exit 1; }
+	@if curl -sf localhost:$(MIMO_PORT)/health >/dev/null; then echo "already running on :$(MIMO_PORT)"; exit 0; fi
+	@echo "Starting mimo-qwen server on :$(MIMO_PORT) [GPU $(GPU_NAME)] CTX=$(MIMO_CTX) NP=$(MIMO_NP)"
+	nohup $(SERVER) \
+		--model $(MODEL_MIMO) --alias $(MIMO_ALIAS) \
+		-ngl 999 --device $(DEVICE) \
+		--flash-attn on \
+		--cache-type-k $(KV) --cache-type-v $(KV) \
+		--ctx-size $(MIMO_CTX) --batch-size 2048 --ubatch-size 2048 --parallel $(MIMO_NP) \
+		--port $(MIMO_PORT) --metrics --no-webui \
+		> $(MIMO_LOGFILE) 2>&1 & echo $$! > $(MIMO_PIDFILE)
+	@for i in $$(seq 1 60); do sleep 2; if curl -sf localhost:$(MIMO_PORT)/health >/dev/null; then echo "mimo server ready on :$(MIMO_PORT) ($$i x 2s)"; exit 0; fi; done; echo "startup timeout - check $(MIMO_LOGFILE)"; exit 1
+
+status-mimo:
+	@curl -s localhost:$(MIMO_PORT)/health; echo
+	@nvidia-smi --query-gpu=memory.used,memory.total --format=csv
+
+logs-mimo:
+	tail -f $(MIMO_LOGFILE)
+
+stop-mimo:
+	@if [ -f $(MIMO_PIDFILE) ] && kill -0 $$(cat $(MIMO_PIDFILE)) 2>/dev/null; then \
+		kill -INT $$(cat $(MIMO_PIDFILE)); \
+	elif pgrep -f "llama-server.*mimo-qwen" >/dev/null; then \
+		echo "pidfile stale, killing mimo-server by command line"; pkill -f "llama-server.*mimo-qwen"; \
+	else \
+		echo "no mimo server running"; \
+	fi; \
+	rm -f $(MIMO_PIDFILE)
+
+bench-llama-mimo:
+	@test -f $(LLAMA_BENCH) || { echo "llama-bench not found at $(LLAMA_BENCH)"; exit 1; }
+	@test -f $(MODEL_MIMO) || { echo "Mimo model not found at $(MODEL_MIMO)"; exit 1; }
+	$(LLAMA_BENCH) -m $(MODEL_MIMO) -n $(or $(N),20) -p $(or $(P),512) -fa 1 -ngl 999
+
+.PHONY: info serve status logs stop bench serve-tg status-tg logs-tg stop-tg test-q4k test-q6k test-argmax test-units token-ab parity bench-tg bench-llama bench-tg-05b bench-llama-05b serve-mimo status-mimo logs-mimo stop-mimo bench-llama-mimo
