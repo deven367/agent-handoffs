@@ -6,6 +6,11 @@
 
 ---
 
+## Read First
+
+1. [`roadmap-tinygrad-parity.md`](file:///Users/deven367/projects/agent-handoffs/mimo-qwen/docs/roadmap-tinygrad-parity.md) — **START HERE for Optimization: Technical blueprint for closing the 1.39 ms gap to llama.cpp (Vectorized Q8_0 GEMV & Fused GatedDeltaNet).**
+2. [`handoff-2026-09-26-initial-benchmarks-and-metadata-fixes.md`](file:///Users/deven367/projects/agent-handoffs/mimo-qwen/docs/handoff-2026-09-26-initial-benchmarks-and-metadata-fixes.md) — Initial benchmark results across H100 and L40S, GGUF metadata repair details, and Makefile controls.
+
 ## 1. Fast-Start Commands (Root Makefile)
 
 ```bash
