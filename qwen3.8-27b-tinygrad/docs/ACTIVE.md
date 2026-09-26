@@ -1,10 +1,10 @@
 # ACTIVE — Current state and next steps
 
-> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g37` on Quartz). Actions 1–3 landed (`c14c50207`), TODO 1–2 landed (`38342a3be`), and **Custom Two-Stage Packed 64-bit Argmax landed (`f0d0522c1`)**: Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize, Fused Residual Add + RMSNorm (`nv_add_rmsnorm`), Compact Q8 Activation Layout, **Two-Stage Custom Greedy Argmax (`nv_argmax`, eliminated `r_2_32_4_970`, saving 1.48 ms/tok)**. Decode speed reached **82.91 tok/s (12.06 ms/tok)**, closing the gap to llama.cpp to **0.46 ms/tok (96.2% parity)**. Parity verified bit-exact across all 248,320 vocabulary tokens. Unit tests 100% passing (`make test-units`).
+> Snapshot: 2026-09-25. Evaluated on NVIDIA H100 SXM5 80GB (`g37` on Quartz). Actions 1–3 landed (`c14c50207`), TODO 1–2 landed (`38342a3be`), Custom Two-Stage Packed 64-bit Argmax landed (`f0d0522c1`), and **SwiGLU SiLU*up Fusion Landed (`cfd17abe5`)**: Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize, Fused Residual Add + RMSNorm (`nv_add_rmsnorm`), Compact Q8 Activation Layout, Two-Stage Custom Greedy Argmax (`nv_argmax`), and **Fused SwiGLU SiLU*up (removed `.contiguous()` barrier in `FFNBlock._feed_forward`)**. Decode speed broke the 12 ms barrier, reaching **83.76 tok/s (11.94 ms/tok)**, closing the gap to llama.cpp to **0.34 ms/tok (97.2% parity)**. Parity verified bit-exact across all 248,320 vocabulary tokens (`make parity`), and greedy token rollout verified identical (`make token-ab`). Unit tests 100% passing (`make test-units`).
 
 ## Read first
 
-1. `handoff-2026-09-25-nv-argmax-landed.md` — **START HERE: custom two-stage nv_argmax kernel implementation, 64-bit lexicographical packing, TinyJit buffer-aliasing fix, benchmark results, and current 0.46 ms gap.**
+1. `handoff-2026-09-25-nv-argmax-landed.md` — **START HERE: custom two-stage nv_argmax kernel implementation, SwiGLU SiLU*up fusion, benchmark results (83.76 tok/s), and current 0.34 ms gap.**
 2. `handoff-2026-09-25-next-agent-argmax-kernel.md` — prior handoff proposing the argmax kernel and analyzing the 1.5 ms bottleneck.
 3. `handoff-2026-09-25-lever-a-rejected-and-reprofile.md` — evidence: Lever A rejected (PTX root cause, zero copy kernels), fresh kernel census, and the two failed argmax restagings.
 4. `handoff-2026-09-25-fused-add-rmsnorm-and-compact-q8.md` — TODO 1+2 Landed (`38342a3be`): fused add+RMSNorm, compact Q8 layout, 73.69 tok/s, clean A/B re-measure, benchmark-hygiene finding, GEMV output-buffer lever.
@@ -24,9 +24,9 @@ make info            # Print auto-detected cluster, GPU, paths, and environment 
 make test-units      # Run Q4_K, Q6_K, and nv_argmax unit sweeps (ALL OK)
 make parity          # Verify 27B model logits (top-5 match: [271, 25, 11751, 248044, 198])
 make token-ab        # Verify 27B greedy token sequence identity [381, 310, 5790, 421, 279, ...]
-make bench-tg        # Measure steady-state tinygrad decode throughput (512 ctx, 20 steps)
+make bench-tg        # Measure steady-state tinygrad decode throughput (512 ctx, 20 steps: 83.76 tok/s)
 make bench-llama     # Measure reference llama.cpp decode throughput (85.87-86.18 tok/s clean)
-make bench-tg-05b    # Fast-iteration test on 0.5B model (126.26 tok/s, 7.92 ms/tok)
+make bench-tg-05b    # Fast-iteration test on 0.5B model (135.14 tok/s, 7.40 ms/tok)
 make bench-llama-05b # Fast-iteration reference llama.cpp on 0.5B model (919 tok/s)
 ```
 
@@ -35,7 +35,7 @@ make bench-llama-05b # Fast-iteration reference llama.cpp on 0.5B model (919 tok
 - **Active Compute Node**: `g37.quartz.uits.iu.edu` (`ssh g37`), NVIDIA H100 SXM5 80GB HBM3 (3,350 GB/s bandwidth). Slurm-gated (needs an active job, partition `h100-debu`, 1 h limit — `scontrol requeue` to renew).
 - **Secondary Node**: `lair-g6` (`ssh lair-g6`), NVIDIA L40S 48GB GDDR6 (864 GB/s bandwidth).
 - **tinygrad Workdir**:
-  - Quartz: `$(HOME)/projects/tinygrad-src` (branch `qwen27b-nv-q8-kernel`, HEAD `f0d0522c1`).
+  - Quartz: `$(HOME)/projects/tinygrad-src` (branch `qwen27b-nv-q8-kernel`, HEAD `cfd17abe5`).
   - Lair: `/u/demistry/tinygrad-src` (branch `qwen27b-nv-q8-kernel`).
 - **Model Paths**:
   - 27B Q4_K_M (Quartz): `/N/scratch/demistry/models/Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf`
@@ -48,7 +48,8 @@ make bench-llama-05b # Fast-iteration reference llama.cpp on 0.5B model (919 tok
 | GPU / Platform | Engine | Decode tok/s | Decode ms/tok | Parity Ratio | Logit Parity |
 |---|---|---:|---:|:---:|:---:|
 | **H100 SXM5 80GB** (`g37`) | **llama.cpp** (`llama-bench`, clean, re-measured 2026-09-25) | **86.18 ± 1.04** | **11.60 ms** | 100% | Reference |
-| **H100 SXM5 80GB** (`g37`) | **tinygrad (`f0d0522c1`: nv_argmax custom kernel)** | **82.91** | **12.06 ms** | **96.2%** | **Bit-exact match** |
+| **H100 SXM5 80GB** (`g37`) | **tinygrad (`cfd17abe5`: SwiGLU fused SiLU*up, nv_argmax)** | **83.76** | **11.94 ms** | **97.2%** | **Bit-exact match** |
+| H100 SXM5 80GB (`g37`) | tinygrad (`f0d0522c1`: nv_argmax custom kernel) | 82.91 | 12.06 ms | 96.2% | Bit-exact match |
 | H100 SXM5 80GB (`g37`) | tinygrad (TODO 1+2: fused add_rmsnorm, compact q8, `38342a3be`) | 73.88 | 13.54 ms | 85.9% | Bit-exact match |
 | H100 SXM5 80GB (`g37`) | tinygrad (Actions 1–3, `c14c50207`) | 68.79 | 14.54 ms | 79.8% | Match (diff $\le 0.0019$) |
 | H100 SXM5 80GB (`g38`) | tinygrad (Task 2: Vectorized Coop) | 62.06 | 16.11 ms | 72.0% | Bit-exact match |

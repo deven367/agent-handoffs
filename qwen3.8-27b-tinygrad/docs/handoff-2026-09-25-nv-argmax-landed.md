@@ -1,12 +1,14 @@
-# HANDOFF — Custom Two-Stage nv_argmax Landed (2026-09-25)
+# HANDOFF — Custom Two-Stage nv_argmax & SwiGLU SiLU*up Fusion Landed (2026-09-25)
 
 ## 1. Executive Summary
 
-- **Objective**: Eliminate the ~1.5 ms/tok latency bottleneck in the vocabulary argmax reduction stage (`r_2_32_4_970`) on NVIDIA H100 SXM5 80GB (`g37.quartz.uits.iu.edu`) to close the gap to `llama.cpp` (86.18 ± 1.04 tok/s, 11.60 ms/tok).
-- **Outcome**: **SUCCESS**. Replaced generic reduction with a custom CUDA two-stage packed 64-bit warp argmax kernel (`nv_argmax`).
-- **Throughput**: Improved steady-state decode throughput from **73.83 tok/s (13.54 ms/tok)** to **82.91 tok/s (12.06 ms/tok)**.
-- **Latency Eliminated**: **-1.48 ms/tok** eliminated in a single commit (`f0d0522c1`). Total latency reduction from initial 09-24 baseline: **-13.93 ms/tok**.
-- **Remaining Gap to llama.cpp**: Narrowed to **0.46 ms/tok** (**96.2% parity** with `llama.cpp` reference).
+- **Objective**: Eliminate decode bottlenecks on NVIDIA H100 SXM5 80GB (`g37.quartz.uits.iu.edu`) to close the gap to `llama.cpp` (86.18 ± 1.04 tok/s, 11.60 ms/tok).
+- **Outcomes**:
+  1. **`f0d0522c1`**: Replaced generic reduction `r_2_32_4_970` with a custom CUDA two-stage packed 64-bit warp argmax kernel (`nv_argmax`), eliminating **1.48 ms/tok** (jumping from 73.88 to 82.91 tok/s).
+  2. **`cfd17abe5`**: Removed `.contiguous()` barrier in `FFNBlock._feed_forward` (`self.ffn_gate(x).silu() * self.ffn_up(x)`), fusing SiLU with the up-projection multiply into a single elementwise kernel and eliminating intermediate DRAM roundtrips.
+- **Throughput**: Improved steady-state decode throughput to **83.76 tok/s (11.94 ms/tok)**, breaking the 12 ms threshold!
+- **Total Latency Eliminated**: **-14.05 ms/tok** from initial 09-24 baseline.
+- **Remaining Gap to llama.cpp**: Narrowed to **0.34 ms/tok** (**97.2% parity** with `llama.cpp` reference).
 - **Parity & Correctness**: 100% bit-exact across unit tests (`make test-units`), logit parity (`make parity`), and greedy token sequences (`make token-ab`).
 
 ---
@@ -18,12 +20,13 @@
 | Initial Baseline (09-24) | 38.47 tok/s | 25.99 ms/tok | 0.00 ms | 14.39 ms | 44.6% | 0.9978 cosine sim |
 | Actions 1–3 Landed (`c14c50207`) | 68.79 tok/s | 14.54 ms/tok | -11.45 ms | 2.94 ms | 79.8% | Match (diff $\le 0.0019$) |
 | Fused Add+RMSNorm (`38342a3be`) | 73.88 tok/s | 13.54 ms/tok | -12.45 ms | 1.94 ms | 85.9% | Bit-exact match |
-| **Current (`f0d0522c1`: `nv_argmax`)** | **82.91 tok/s** | **12.06 ms/tok** | **-13.93 ms** | **0.46 ms** | **96.2%** | **Bit-exact match** |
+| `nv_argmax` custom kernel (`f0d0522c1`) | 82.91 tok/s | 12.06 ms/tok | -13.93 ms | 0.46 ms | 96.2% | Bit-exact match |
+| **Current (`cfd17abe5`: SwiGLU fused SiLU*up + `nv_argmax`)** | **83.76 tok/s** | **11.94 ms/tok** | **-14.05 ms** | **0.34 ms** | **97.2%** | **Bit-exact match** |
 | **Reference: `llama.cpp` (`llama-bench`)** | **86.18 ± 1.04 tok/s** | **11.60 ms/tok** | **-14.39 ms** | **0.00 ms** | **100% (Goal)** | Reference |
 
-- **Token Probe (`make token-ab`)**: Decode speed 77.70 tok/s (vs 69.78 tok/s baseline). Sequence: `[381, 310, 5790, 421, 279, 491, 2936, 1000, 381]` (bit-exact).
+- **Token Probe (`make token-ab`)**: Decode speed 78.79 tok/s (vs 69.78 tok/s baseline). Sequence: `[381, 310, 5790, 421, 279, 491, 2936, 1000, 381]` (bit-exact).
 - **Logit Parity (`make parity`)**: Bit-exact `argmax=271`, top-5 match `[(271, 34.0718), (25, 19.5536), (11751, 18.7959), (248044, 17.0679), (198, 16.6857)]`, sum `-800723.00`.
-- **0.5B Fast Benchmark (`make bench-tg-05b`)**: 126.26 tok/s (7.92 ms/tok) vs 108.33 tok/s baseline.
+- **0.5B Fast Benchmark (`make bench-tg-05b`)**: 135.14 tok/s (7.40 ms/tok) vs 108.33 tok/s baseline.
 
 ---
 
