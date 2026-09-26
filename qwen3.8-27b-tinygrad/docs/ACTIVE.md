@@ -78,19 +78,26 @@ as fused strided index arithmetic. Any lever premised on eliminating copies is d
 
 ## Ranked Next Steps to Close the Remaining ~1.9 ms Gap to llama.cpp (11.65 ms)
 
-1. **Identify + fix `r_2_32_4_970` (~1.5 ms/step, 11% of the step).** Two calls at ~760 us each
-   on a 248,320-element (vocab) tensor = ~1.3 GB/s, ~50x slower than it should be; llama.cpp
-   does the same argmax in microseconds. Reproduce with a 2-step `DEBUG=5` decode, take the
-   source block matching the kernel's ordinal, then fuse a single-pass argmax or fix the reduce's
-   launch geometry. Cutting it to ~50 us/call closes ~70% of the gap on its own.
+1. **The vocab argmax/sample stage — ~1.5 ms/token (11% of the step). IDENTIFIED, needs a custom
+   kernel.** `r_2_32_4_970` runs the 248,320-entry argmax on **2 blocks × 32 threads** with the
+   Gumbel correction fused in. Two naive fixes were measured and reverted: a nested
+   `argmax(argmax)` is silently WRONG (returns a row/column, not a vocab id — its 77.62 tok/s was
+   a fake win), and a provably correct `argmax`+`max`+`gather` restaging is 1.65 ms SLOWER
+   (62.58 tok/s). What is needed: a custom greedy-argmax kernel in the `tinygrad/llm/kernels/`
+   `nv.py` style — warp-per-32-chunk `(value,index)` partials + one single-block second stage;
+   the data is ~1 MB + ~31 KB, so tens of microseconds, i.e. ~70% of the remaining gap.
 2. **Fuse the remaining elementwise families** (~3.9 ms/window): SwiGLU + RoPE + the 2nd residual
    add are still separate kernels; ride the 2nd residual add into the next block's `attn_norm`
    (cross-block `Transformer.forward` restructure).
 3. **GEMV streaming efficiency**: ~7.9 ms against a 5.0 ms HBM floor — the rest of the gap, but
    deep work; only after 1 and 2.
 4. Multi-warp grid-fused RMSNorm + Q8 quantize (old TODO 3) stays queued behind 1-3.
-5. **Kernel rule learned 2026-09-25:** a custom-kernel store may only be written through an
-   address that depends on the lane axis. A lane-invariant store makes the CUDA renderer gate
-   the store and re-emit the last reduce butterfly, so the stored value is doubled.
+5. **Kernel rules learned 2026-09-25:** (a) a custom-kernel store may only be written through an
+   address that depends on the lane axis — a lane-invariant store makes the CUDA renderer gate
+   the store and re-emit the last reduce butterfly, doubling the stored value; (b) the generic
+   reduce scheduler will pick a 2-block launch for a 248 k-element argmax, so a hot reduce needs
+   a custom kernel, not a reshape.
+6. **Slurm**: partition is `h100-debug` (squeue truncates), submissions need `-A r00117`, 1 h is
+   the hard max; `scontrol requeue`/`update` do not work on interactive jobs.
 
 **Benchmark hygiene:** a resident `llama-server` (44% SM bursts) cut llama-bench 85.87 → 48.51 tok/s. Always `make stop` before benchmarking, `make serve` after.
