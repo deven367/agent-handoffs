@@ -87,44 +87,29 @@ decode: 60.08 tok/s (16.65 ms/tok) 50 tokens in 0.83s mem=9635MB
 
 The following targets were added to root `Makefile`:
 ```makefile
-MIMO_PORT      ?= 9935
 MIMO_ALIAS     ?= mimo-qwen
-MIMO_CTX       ?= 32768
-MIMO_NP        ?= 1
-MIMO_LOGFILE   ?= /tmp/llama-server-mimo.log
-MIMO_PIDFILE   ?= /tmp/llama-server-mimo.pid
 
 serve-mimo:
 	@test -f $(SERVER) || { echo "llama-server not found at $(SERVER)"; exit 1; }
 	@test -f $(MODEL_MIMO) || { echo "Mimo model not found at $(MODEL_MIMO)"; exit 1; }
-	@if curl -sf localhost:$(MIMO_PORT)/health >/dev/null; then echo "already running on :$(MIMO_PORT)"; exit 0; fi
-	@echo "Starting mimo-qwen server on :$(MIMO_PORT) [GPU $(GPU_NAME)] CTX=$(MIMO_CTX) NP=$(MIMO_NP)"
+	@if curl -sf localhost:$(PORT)/health >/dev/null; then echo "already running on :$(PORT)"; exit 0; fi
+	@echo "Starting mimo-qwen server on :$(PORT) [GPU $(GPU_NAME)] CTX=$(CTX) NP=$(NP)"
 	nohup $(SERVER) \
 		--model $(MODEL_MIMO) --alias $(MIMO_ALIAS) \
 		-ngl 999 --device $(DEVICE) \
 		--flash-attn on \
 		--cache-type-k $(KV) --cache-type-v $(KV) \
-		--ctx-size $(MIMO_CTX) --batch-size 2048 --ubatch-size 2048 --parallel $(MIMO_NP) \
-		--port $(MIMO_PORT) --metrics --no-webui \
-		> $(MIMO_LOGFILE) 2>&1 & echo $$! > $(MIMO_PIDFILE)
-	@for i in $$(seq 1 60); do sleep 2; if curl -sf localhost:$(MIMO_PORT)/health >/dev/null; then echo "mimo server ready on :$(MIMO_PORT) ($$i x 2s)"; exit 0; fi; done; echo "startup timeout - check $(MIMO_LOGFILE)"; exit 1
+		--ctx-size $(CTX) --batch-size 2048 --ubatch-size 2048 --parallel $(NP) \
+		$(YARN_ARGS) \
+		--port $(PORT) --metrics --no-webui \
+		> $(LOGFILE) 2>&1 & echo $$! > /tmp/llama-server.pid
+	@for i in $$(seq 1 60); do sleep 2; if curl -sf localhost:$(PORT)/health >/dev/null; then echo "mimo server ready on :$(PORT) ($$i x 2s)"; exit 0; fi; done; echo "startup timeout - check $(LOGFILE)"; exit 1
 
-status-mimo:
-	@curl -s localhost:$(MIMO_PORT)/health; echo
-	@nvidia-smi --query-gpu=memory.used,memory.total --format=csv
+status-mimo: status
 
-logs-mimo:
-	tail -f $(MIMO_LOGFILE)
+logs-mimo: logs
 
-stop-mimo:
-	@if [ -f $(MIMO_PIDFILE) ] && kill -0 $$(cat $(MIMO_PIDFILE)) 2>/dev/null; then \
-		kill -INT $$(cat $(MIMO_PIDFILE)); \
-	elif pgrep -f "llama-server.*mimo-qwen" >/dev/null; then \
-		echo "pidfile stale, killing mimo-server by command line"; pkill -f "llama-server.*mimo-qwen"; \
-	else \
-		echo "no mimo server running"; \
-	fi; \
-	rm -f $(MIMO_PIDFILE)
+stop-mimo: stop
 
 bench-llama-mimo:
 	@test -f $(LLAMA_BENCH) || { echo "llama-bench not found at $(LLAMA_BENCH)"; exit 1; }

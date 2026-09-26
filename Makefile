@@ -12,10 +12,10 @@
 #   make status-tg     print tinygrad health + GPU memory
 #   make logs-tg       tail tinygrad log
 #   make stop-tg       stop tinygrad server
-#   make serve-mimo    start llama-server with mimo-qwen (background, log to $(MIMO_LOGFILE))
-#   make status-mimo   print health + GPU memory for mimo-qwen server
-#   make logs-mimo     tail mimo-qwen server log
-#   make stop-mimo     stop mimo-qwen server (SIGINT)
+#   make serve-mimo    start llama-server with mimo-qwen (background, log to $(LOGFILE))
+#   make status-mimo   print health + GPU memory (alias for make status)
+#   make logs-mimo     tail server log (alias for make logs)
+#   make stop-mimo     stop server (alias for make stop)
 #
 # Benchmarking & verification:
 #   make test-q4k      run cooperative Q4_K unit test sweep
@@ -64,8 +64,10 @@ MODEL_MIMO     ?= $(MODEL_DIR)/mimo-qwen-q8_0.gguf
 PORT    ?= 9932
 ALIAS   ?= Qwen3.8-27B
 DEVICE  ?= CUDA0
-CTX     ?= 262144              # native max; YaRN 1M needs rope scaling + more KV mem
-NP      ?= 1                   # slots; 1 = full $(CTX) per request
+# native max 256K (262144); YaRN 1M needs rope scaling + more KV mem
+CTX     ?= 262144
+# slots; 1 = full $(CTX) per request
+NP      ?= 1
 
 # Auto-detect GPU and pick a KV cache type that fits comfortably.
 GPU_NAME ?= $(shell nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
@@ -215,44 +217,29 @@ bench-llama-05b:
 	@test -f $(MODEL_05B) || { echo "0.5B Model not found at $(MODEL_05B)"; exit 1; }
 	$(LLAMA_BENCH) -m $(MODEL_05B) -n 20 -p 512 -fa 1
 
-MIMO_PORT      ?= 9935
 MIMO_ALIAS     ?= mimo-qwen
-MIMO_CTX       ?= 32768
-MIMO_NP        ?= 1
-MIMO_LOGFILE   ?= /tmp/llama-server-mimo.log
-MIMO_PIDFILE   ?= /tmp/llama-server-mimo.pid
 
 serve-mimo:
 	@test -f $(SERVER) || { echo "llama-server not found at $(SERVER)"; exit 1; }
 	@test -f $(MODEL_MIMO) || { echo "Mimo model not found at $(MODEL_MIMO)"; exit 1; }
-	@if curl -sf localhost:$(MIMO_PORT)/health >/dev/null; then echo "already running on :$(MIMO_PORT)"; exit 0; fi
-	@echo "Starting mimo-qwen server on :$(MIMO_PORT) [GPU $(GPU_NAME)] CTX=$(MIMO_CTX) NP=$(MIMO_NP)"
+	@if curl -sf localhost:$(PORT)/health >/dev/null; then echo "already running on :$(PORT)"; exit 0; fi
+	@echo "Starting mimo-qwen server on :$(PORT) [GPU $(GPU_NAME)] CTX=$(CTX) NP=$(NP)"
 	nohup $(SERVER) \
 		--model $(MODEL_MIMO) --alias $(MIMO_ALIAS) \
 		-ngl 999 --device $(DEVICE) \
 		--flash-attn on \
 		--cache-type-k $(KV) --cache-type-v $(KV) \
-		--ctx-size $(MIMO_CTX) --batch-size 2048 --ubatch-size 2048 --parallel $(MIMO_NP) \
-		--port $(MIMO_PORT) --metrics --no-webui \
-		> $(MIMO_LOGFILE) 2>&1 & echo $$! > $(MIMO_PIDFILE)
-	@for i in $$(seq 1 60); do sleep 2; if curl -sf localhost:$(MIMO_PORT)/health >/dev/null; then echo "mimo server ready on :$(MIMO_PORT) ($$i x 2s)"; exit 0; fi; done; echo "startup timeout - check $(MIMO_LOGFILE)"; exit 1
+		--ctx-size $(CTX) --batch-size 2048 --ubatch-size 2048 --parallel $(NP) \
+		$(YARN_ARGS) \
+		--port $(PORT) --metrics --no-webui \
+		> $(LOGFILE) 2>&1 & echo $$! > /tmp/llama-server.pid
+	@for i in $$(seq 1 60); do sleep 2; if curl -sf localhost:$(PORT)/health >/dev/null; then echo "mimo server ready on :$(PORT) ($$i x 2s)"; exit 0; fi; done; echo "startup timeout - check $(LOGFILE)"; exit 1
 
-status-mimo:
-	@curl -s localhost:$(MIMO_PORT)/health; echo
-	@nvidia-smi --query-gpu=memory.used,memory.total --format=csv
+status-mimo: status
 
-logs-mimo:
-	tail -f $(MIMO_LOGFILE)
+logs-mimo: logs
 
-stop-mimo:
-	@if [ -f $(MIMO_PIDFILE) ] && kill -0 $$(cat $(MIMO_PIDFILE)) 2>/dev/null; then \
-		kill -INT $$(cat $(MIMO_PIDFILE)); \
-	elif pgrep -f "llama-server.*mimo-qwen" >/dev/null; then \
-		echo "pidfile stale, killing mimo-server by command line"; pkill -f "llama-server.*mimo-qwen"; \
-	else \
-		echo "no mimo server running"; \
-	fi; \
-	rm -f $(MIMO_PIDFILE)
+stop-mimo: stop
 
 bench-llama-mimo:
 	@test -f $(LLAMA_BENCH) || { echo "llama-bench not found at $(LLAMA_BENCH)"; exit 1; }

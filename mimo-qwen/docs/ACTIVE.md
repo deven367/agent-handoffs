@@ -14,10 +14,10 @@ cd ~/projects/agent-handoffs   # (or /u/demistry/agent-handoffs on Lair)
 
 make info                # Check cluster, GPU, model paths, and llama.cpp/tinygrad settings
 make bench-llama-mimo    # Benchmark llama.cpp decode throughput (ctx=512 steps=20, flash-attn)
-make serve-mimo          # Start production llama-server with mimo-qwen on :9935
-make status-mimo         # Check server health + GPU VRAM allocation
-make logs-mimo           # Tail server log
-make stop-mimo           # Gracefully stop server
+make serve-mimo          # Start production llama-server with mimo-qwen on unified :$(PORT) (default 9932, full 256K ctx)
+make status-mimo         # Check server health + GPU VRAM allocation (alias for make status)
+make logs-mimo           # Tail server log (alias for make logs)
+make stop-mimo           # Gracefully stop server (alias for make stop)
 ```
 
 Custom benchmark arguments:
