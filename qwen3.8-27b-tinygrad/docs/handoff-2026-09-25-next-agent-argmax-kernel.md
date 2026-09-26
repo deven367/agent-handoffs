@@ -7,9 +7,9 @@
 | item | state |
 |---|---|
 | tinygrad (g37) | `38342a3be`, branch `qwen27b-nv-q8-kernel`, **clean tree — every patch from this session was reverted**, pushed, `origin` in sync |
-| agent-handoffs (g37) | `6edbde5` (synced with the Mac repo) |
-| llama-server | **DOWN** (nothing on :9932, GPU 0 MiB) — restore it, see §1 |
-| Slurm | I cancelled the old interactive job and queued `10644117` (`h100-debug`, 1 h). It may have started or expired — **check first** |
+| agent-handoffs (g37) | **`6edbde5`, needs a `git pull`** — the Mac repo has this handoff and `scripts/greedy_token_ab.py` pushed on top of `6edbde5` (`git pull` before you need the probe script) |
+| llama-server | **DOWN** (nothing on :9932, GPU 0 MiB). I lost node access before I could run `make serve` — restore it, see §1 |
+| Slurm | **no allocation.** I cancelled the interactive job I was ssh'd into (which also killed my shell) and had queued `10644117` (`h100-debug`, 1 h); whether it started, expired or is still pending is unknown. `ssh g37` fails with `you have no active jobs on this node (pam_slurm_adopt)` until a job holds the node — submit one, §3 |
 | perf | tinygrad **73.83 tok/s (13.54 ms)**, llama.cpp **85.99 ± 1.43 tok/s (11.66 ms)**, both re-measured clean this session → **85.9 % parity, 1.91 ms/tok gap** |
 
 ## 0. First 5 minutes
