@@ -169,7 +169,16 @@ test-q6k:
 	@test -d $(TG_CWD) || { echo "tinygrad-src not found at $(TG_CWD)"; exit 1; }
 	$(TG_ENV) python3 $(SCRIPTS_DIR)/sweep_q6k.py
 
-test-units: test-q4k test-q6k
+test-argmax:
+	@test -d $(TG_CWD) || { echo "tinygrad-src not found at $(TG_CWD)"; exit 1; }
+	$(TG_ENV) python3 $(SCRIPTS_DIR)/test_argmax.py
+
+test-units: test-q4k test-q6k test-argmax
+
+token-ab:
+	@test -d $(TG_CWD) || { echo "tinygrad-src not found at $(TG_CWD)"; exit 1; }
+	@test -f $(MODEL_Q4) || { echo "Model not found at $(MODEL_Q4)"; exit 1; }
+	$(TG_ENV) MODEL=$(MODEL_Q4) python3 $(SCRIPTS_DIR)/greedy_token_ab.py
 
 parity:
 	@test -d $(TG_CWD) || { echo "tinygrad-src not found at $(TG_CWD)"; exit 1; }
@@ -198,4 +207,4 @@ bench-llama-05b:
 	@test -f $(MODEL_05B) || { echo "0.5B Model not found at $(MODEL_05B)"; exit 1; }
 	$(LLAMA_BENCH) -m $(MODEL_05B) -n 20 -p 512 -fa 1
 
-.PHONY: info serve status logs stop bench serve-tg status-tg logs-tg stop-tg test-q4k test-q6k test-units parity bench-tg bench-llama bench-tg-05b bench-llama-05b
+.PHONY: info serve status logs stop bench serve-tg status-tg logs-tg stop-tg test-q4k test-q6k test-argmax test-units token-ab parity bench-tg bench-llama bench-tg-05b bench-llama-05b
