@@ -4,13 +4,14 @@
 
 ## Read first
 
-1. `handoff-2026-09-25-lever-a-rejected-and-reprofile.md` — **START HERE: Lever A rejected (PTX root cause; the 572 copy kernels it targeted do not exist), fresh kernel census, re-ranked next steps.**
-2. `handoff-2026-09-25-fused-add-rmsnorm-and-compact-q8.md` — TODO 1+2 Landed (`38342a3be`): fused add+RMSNorm, compact Q8 layout, 73.69 tok/s, clean A/B re-measure, benchmark-hygiene finding, GEMV output-buffer lever.
-3. `handoff-2026-09-25-actions-1-2-3-completed.md` — Actions 1, 2, and 3 Landed (Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize), Current Gap Analysis, and Unrolling Trap Takeaways (`c14c50207`).
-4. `handoff-2026-09-25-gated-deltanet-normalize-and-next-steps.md` — GatedDeltaNet Normalization Profiling, GPU Clock Dynamics, and Next Optimization Roadmap.
-5. `handoff-2026-09-25-task3-fused-rmsnorm.md` — Task 3 Single-Pass Block-Fused RMSNorm (eliminates 256 reduction kernels, saving 1.57 ms/tok).
-6. `handoff-2026-09-25-task2-vectorized-q4k-gemv.md` — Task 2 Vectorized Cooperative GEMV (62.06 tok/s on H100, 128-bit/64-bit vector loads).
-7. `handoff-2026-09-25-h100-baseline-and-quartz-setup.md` — Fast-start cheat sheet (one-command make targets), H100 SXM5 benchmark results, 2,060-kernel decode latency breakdown, 0.5B debugging setup.
+1. `handoff-2026-09-25-next-agent-argmax-kernel.md` — **START HERE: state you inherit, first 5 minutes, server restore, and the full work order for the custom greedy-argmax kernel (the ~1.5 ms/token stage that is ~73% of the remaining gap).**
+2. `handoff-2026-09-25-lever-a-rejected-and-reprofile.md` — evidence: Lever A rejected (PTX root cause, zero copy kernels), fresh kernel census, and the two failed argmax restagings.
+3. `handoff-2026-09-25-fused-add-rmsnorm-and-compact-q8.md` — TODO 1+2 Landed (`38342a3be`): fused add+RMSNorm, compact Q8 layout, 73.69 tok/s, clean A/B re-measure, benchmark-hygiene finding, GEMV output-buffer lever.
+4. `handoff-2026-09-25-actions-1-2-3-completed.md` — Actions 1, 2, and 3 Landed (Fused QK L2 Norm, 64-bit Vectorized Q6_K, Intra-Warp Q8 Quantize), Current Gap Analysis, and Unrolling Trap Takeaways (`c14c50207`).
+5. `handoff-2026-09-25-gated-deltanet-normalize-and-next-steps.md` — GatedDeltaNet Normalization Profiling, GPU Clock Dynamics, and Next Optimization Roadmap.
+6. `handoff-2026-09-25-task3-fused-rmsnorm.md` — Task 3 Single-Pass Block-Fused RMSNorm (eliminates 256 reduction kernels, saving 1.57 ms/tok).
+7. `handoff-2026-09-25-task2-vectorized-q4k-gemv.md` — Task 2 Vectorized Cooperative GEMV (62.06 tok/s on H100, 128-bit/64-bit vector loads).
+8. `handoff-2026-09-25-h100-baseline-and-quartz-setup.md` — Fast-start cheat sheet (one-command make targets), H100 SXM5 benchmark results, 2,060-kernel decode latency breakdown, 0.5B debugging setup.
 
 ## Fast-Start Commands (Root Makefile)
 
@@ -44,8 +45,8 @@ make bench-llama-05b # Fast-iteration reference llama.cpp on 0.5B model (919 tok
 
 | GPU / Platform | Engine | Decode tok/s | Decode ms/tok | Parity Ratio | Logit Parity |
 |---|---|---:|---:|:---:|:---:|
-| **H100 SXM5 80GB** (`g37`) | **llama.cpp** (`llama-bench`, clean) | **85.87 ± 1.00** | **11.65 ms** | 100% | Reference |
-| **H100 SXM5 80GB** (`g37`) | **tinygrad (TODO 1+2: fused add_rmsnorm, compact q8, `38342a3be`)** | **73.83** | **13.54 ms** | **86.0%** | **Bit-exact match** |
+| **H100 SXM5 80GB** (`g37`) | **llama.cpp** (`llama-bench`, clean, re-measured 2026-09-25) | **85.99 ± 1.43** | **11.66 ms** | 100% | Reference |
+| **H100 SXM5 80GB** (`g37`) | **tinygrad (TODO 1+2: fused add_rmsnorm, compact q8, `38342a3be`)** | **73.83** | **13.54 ms** | **85.9%** | **Bit-exact match** |
 | H100 SXM5 80GB (`g37`) | tinygrad (Actions 1–3, `c14c50207`) | 68.79 | 14.54 ms | 79.8% | Match (diff $\le 0.0019$) |
 | H100 SXM5 80GB (`g38`) | tinygrad (Task 2: Vectorized Coop) | 62.06 | 16.11 ms | 72.0% | Bit-exact match |
 | H100 SXM5 80GB (`g37`) | tinygrad (Task 1: Heuristic r_256) | 53.07 | 18.84 ms | 61.6% | Bit-exact match |
