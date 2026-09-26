@@ -47,13 +47,7 @@ def run_forward(model_path: str, cs: int) -> np.ndarray:
     def hooked(self, tokens, start_pos, temperature):
         x = self.token_embd(tokens).float()
         for block in self.blk: x = block(x, start_pos)
-        if isinstance(x, tuple):
-            h, res = x
-            from tinygrad.llm.kernels.nv import nv_add_rmsnorm
-            _, final_normed = nv_add_rmsnorm(h[:, -1:], res[:, -1:], self.output_norm.weight, self.output_norm.eps)
-        else:
-            final_normed = self.output_norm(x[:, -1:])
-        logits = self.output(final_normed)[:, -1, :]
+        logits = self.output(self.output_norm(x[:, -1:]))[:, -1, :]
         captured.append(logits)
         return logits
     m.Transformer.forward = hooked
