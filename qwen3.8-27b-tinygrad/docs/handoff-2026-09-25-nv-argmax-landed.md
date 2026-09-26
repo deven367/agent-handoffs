@@ -78,8 +78,8 @@ Tinygrad's generic reduction scheduler scheduled the 248,320-element vocabulary 
 
 With `nv_argmax` landed, the remaining 0.46 ms decode gap is distributed across:
 1. **Elementwise Kernel Fusion (~3.9 ms total across ~511 launches)**:
-   - Fuse SwiGLU (`x * silu(gate)`) into a single custom warp kernel.
-   - Fuse the second residual addition into the next layer's attention norm.
+   - **SwiGLU Activation Fusing (Tested on 0.5B)**: Removing `.contiguous()` from `self.ffn_gate(x).silu().contiguous() * self.ffn_up(x)` in `FFNBlock._feed_forward` yielded a **+9.73 tok/s boost (125.41 -> 135.14 tok/s, -0.57 ms/tok)** on 0.5B with bit-exact token match. This fuses SiLU with the up-projection elementwise multiplication and eliminates intermediate DRAM roundtrips (`E_136_32_4`). Ready for 27B validation.
+   - **Second Residual Add**: Restructure cross-block residual add to ride into the next block's attention norm.
 2. **Multi-Warp Grid-Fused RMSNorm + Q8 Quantize**:
    - Grid-launch 160 warps where each warp handles 1 Q8 group (32 elements) to eliminate 188 separate `nv_q8_quantize` kernel launches (~1.5 ms) without triggering the single-warp unrolling register-spill trap.
 3. **Quantized GEMV Memory Efficiency**:
