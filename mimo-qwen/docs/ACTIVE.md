@@ -44,18 +44,22 @@ MODEL=/scratch/local/demistry/models/mimo-qwen-q8_0.gguf PYTHONPATH=/u/demistry/
 
 ---
 
-## 2. Benchmark Comparison Table (`mimo-qwen-q8_0.gguf`, ctx=512)
+## 2. Benchmark Comparison Table (ctx=512)
 
-| Platform / GPU | Engine | Steady-State Decode (tok/s) | Latency (ms/tok) | Prompt Processing (`pp512`) | VRAM Used |
-| :--- | :--- | :---: | :---: | :---: | :---: |
-| **H100 SXM5 80GB** (`g37`) | **`llama.cpp`** (`llama-bench`, `-fa 1 -ngl 999`) | **210.29 ± 2.26** | **4.75 ms** | **8,106.35 ± 728.75** | ~9.2 GB |
-| **H100 SXM5 80GB** (`g37`) | **`tinygrad`** (`bench_decode.py`, CUDA) | **162.80** | **6.14 ms** | N/A | ~9.6 GB |
-| **L40S 48GB** (`lair-g6`) | **`llama.cpp`** (`llama-bench`, `-fa 1 -ngl 999`) | **73.57 ± 0.44** | **13.59 ms** | **8,354.95 ± 536.62** | ~9.2 GB |
-| **L40S 48GB** (`lair-g6`) | **`tinygrad`** (`bench_decode.py`, CUDA) | **60.11** | **16.64 ms** | N/A | ~9.6 GB |
+| Platform / GPU | Quantization | Engine | Steady-State Decode (tok/s) | Latency (ms/tok) | Prompt Processing (`pp512`) | VRAM Used |
+| :--- | :---: | :--- | :---: | :---: | :---: | :---: |
+| **H100 SXM5 80GB** (`g37`) | **Q8_0** | **`llama.cpp`** (`llama-bench`, `-fa 1 -ngl 999`) | **210.29 ± 2.26** | **4.75 ms** | **8,106.35 ± 728.75** | ~9.2 GB |
+| **H100 SXM5 80GB** (`g37`) | **Q8_0** | **`tinygrad`** (`bench_decode.py`, CUDA) | **162.80** | **6.14 ms** | N/A | ~9.6 GB |
+| **L40S 48GB** (`lair-g6`) | **Q8_0** | **`llama.cpp`** (`llama-bench`, `-fa 1 -ngl 999`) | **73.57 ± 0.44** | **13.59 ms** | **8,354.95 ± 536.62** | ~9.2 GB |
+| **L40S 48GB** (`lair-g6`) | **Q8_0** | **`tinygrad`** (`bench_decode.py`, CUDA) | **60.11** | **16.64 ms** | N/A | ~9.6 GB |
+| **L40S 48GB** (`lair-g6`) | **F16** | **`llama.cpp`** (`llama-bench`, `-fa 1 -ngl 999`) | **43.24 ± 0.08** | **23.13 ms** | **7,098.09 ± 441.95** | ~17.5 GB |
+| **L40S 48GB** (`lair-g6`) | **F16** | **`tinygrad`** (`bench_decode.py`, CUDA) | **2.63** | **380.42 ms** | N/A | ~18.0 GB |
 
-### Performance Delta Summary
-- **On H100 SXM5**: `llama.cpp` is **1.29x faster** (+47.5 tok/s, -1.39 ms/tok).
-- **On L40S**: `llama.cpp` is **1.22x faster** (+13.5 tok/s, -3.05 ms/tok).
+### Performance Analysis: Why Q8_0 is ~1.7x Faster than F16 in Decode
+- **Strict Memory-Bandwidth Floor**: Single-batch token decode reads every weight tensor once per token.
+  - **F16**: Streams **16.68 GB** from VRAM per token. Theoretical physical limit on L40S (864 GB/s): $16.68 \times 10^9 / (864 \times 10^9) = 19.3\text{ ms} \to \mathbf{51.8\text{ tok/s}}$ max theoretical. At realistic ~83% memory bus saturation: **43.2 tok/s** (exactly matching `llama.cpp`).
+  - **Q8_0**: Streams **8.86 GB** from VRAM per token (47% reduction in memory traffic!). Theoretical physical limit on L40S: $8.86 \times 10^9 / (864 \times 10^9) = 10.2\text{ ms} \to \mathbf{97.5\text{ tok/s}}$ max theoretical. At realistic memory bus saturation + state updates: **73.6 tok/s**.
+- **tinygrad F16 Naive Lowering**: `tinygrad`'s decode engine has specialized hand-tuned kernels for quantized GEMVs (`_q8_0_decode_kernel`, `_q4_k_v4`, `_q6_k_v2`), but unquantized F16 falls back to generic compiler lowering without custom GEMV specialization, stalling on memory roundtrips at 2.6 tok/s.
 
 ---
 
